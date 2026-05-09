@@ -10,7 +10,7 @@ const app = express();
 app.use('/images', express.static(__dirname + '/images'));
 const server = http.createServer(app);
 const io = new Server(server);
-const BASE_URL = process.env.BASE_URL || "https://gabriel.onrender.com";
+const BASE_URL = process.env.BASE_URL || "https://gabriel-luhm.onrender.com";
 
 const messagesEvangeliques = [
     "Le voleur ne vient que pour dérober, égorger et détruire; Jésus est venu afin que les brebis aient la vie et qu'elles soient dans l' abondance.",
