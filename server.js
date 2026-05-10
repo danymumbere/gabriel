@@ -1,3 +1,4 @@
+const path = require('path');
 require('dotenv').config();
 const { google } = require('googleapis');
 const { Client, LocalAuth } = require('whatsapp-web.js');
@@ -10,7 +11,7 @@ const app = express();
 app.use('/images', express.static(__dirname + '/images'));
 const server = http.createServer(app);
 const io = new Server(server);
-const BASE_URL = process.env.BASE_URL || "https://gabriel-luhm.onrender.com";
+const BASE_URL = process.env.BASE_URL || "https://gabriel-diffusion.onrender.com";
 
 const messagesEvangeliques = [
     "Le voleur ne vient que pour dérober, égorger et détruire; Jésus est venu afin que les brebis aient la vie et qu'elles soient dans l' abondance.",
@@ -137,6 +138,14 @@ app.get('/oauth2callback', async (req, res) => {
     } catch (error) {
         res.status(500).send("Erreur de synchronisation.");
     }
+});
+
+app.get('/privacy', (req, res) => {
+    res.sendFile(path.join(__dirname, 'privacy.html'));
+});
+
+app.get('/terms', (req, res) => {
+    res.sendFile(path.join(__dirname, 'terms.html'));
 });
 
 const PORT = process.env.PORT || 3000;
