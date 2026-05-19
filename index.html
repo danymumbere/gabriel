@@ -21,12 +21,10 @@
         button:hover { opacity: 0.9; }
         .grid-networks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         
-        /* Styles des menus déroulants d'instructions */
         details { text-align: left; background: #f9f9f9; padding: 10px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #eee; }
         summary { font-weight: bold; cursor: pointer; color: #555; outline: none; }
         details p, details ol { font-size: 0.85em; line-height: 1.4; margin: 10px 0 0 0; padding-left: 20px; }
         
-        /* Liste des contacts */
         .contact-list-scroll { max-height: 300px; overflow-y: auto; text-align: left; border: 1px solid #eee; padding: 10px; border-radius: 8px; margin-top: 10px; }
         .contact-item { display: flex; align-items: center; padding: 8px; border-bottom: 1px solid #f9f9f9; }
         .contact-item input { width: auto; margin-right: 10px; }
@@ -37,12 +35,11 @@
 </head>
 <body>
     <div class="container">
-        <img src="/images/logo_gabriel_deux.jpg" class="photo" alt="--logo--">
+        <img src="/images/logo_gabriel_deux.jpg" style="width: 80px; border-radius: 50%;" alt="--logo--">
         <h1>Bienvenue sur Gabriel</h1>
         <h4>Le site qui vous permet d'évangéliser par message WhatsApp en masse et rapidement</h4>
         <p id="status-text" class="status">En attente de WhatsApp...</p>
 
-        <!-- SECTION QR CODE -->
         <div id="qr-section">
             <details>
                 <summary>Comment se connecter via QR Code ?</summary>
@@ -57,7 +54,6 @@
             <p><small>Scannez pour connecter WhatsApp ou liez via numéro de téléphone</small></p>
         </div>
 
-        <!-- SECTION NUMÉRO -->
         <div class="pairing-section" id="pairing-ui">
             <details>
                 <summary>Comment lier via numéro de téléphone ?</summary>
@@ -76,7 +72,6 @@
             <div id="display-code" class="pairing-code"></div>
         </div>
 
-        <!-- SÉLECTION DES CONTACTS (Caché par défaut) -->
         <div id="contact-selection-ui" class="contact-selection hidden">
             <h3>👥 Vos Contacts Google</h3>
             <p><small>Décochez les personnes à exclure de l'envoi.</small></p>
@@ -95,10 +90,7 @@
         </div>
 
         <div class="spacer"></div>
-        <div class="spacer"></div>
-        <div class="spacer"></div>
 
-        <!-- Menu Dons -->
         <div class="donation-menu">
             <h3>💛 Faire un don</h3>
             <div class="grid-networks">
@@ -112,7 +104,7 @@
             </div>
         </div>
     </div>
-    <p style="margin-top:30px; font-size:0.9em;">
+    <p style="margin-top:30px; font-size:0.9em; text-align: center;">
         <a href="/privacy" target="_blank">Politique de confidentialité</a> |
         <a href="/terms" target="_blank">Conditions d'utilisation</a>
     </p>
@@ -124,13 +116,21 @@
         // Gestion Socket
         socket.on('qr_code', (url) => { document.getElementById('qr-image').src = url; });
         socket.on('pairing_code', (code) => { document.getElementById('display-code').innerText = code; });
+        
         socket.on('status', (msg) => { 
             document.getElementById('status-text').innerText = msg;
             document.getElementById('qr-section').classList.add('hidden');
             document.getElementById('pairing-ui').classList.add('hidden');
         });
+        
         socket.on('progress', (data) => {
-            document.getElementById('status-text').innerText = `Envoi : ${data.current} / ${data.total} (${data.lastContact})`;
+            document.getElementById('status-text').innerText = `⏳ Envoi en cours : ${data.current} / ${data.total} (${data.lastContact})`;
+        });
+
+        // NOUVEAU : Écouteur de succès final
+        socket.on('finished', (data) => {
+            document.getElementById('status-text').innerText = `✅ Terminé ! ${data.total} messages envoyés avec succès.`;
+            alert(`Campagne terminée ! ${data.total} messages envoyés.`);
         });
 
         // Charger messages
@@ -184,8 +184,15 @@
             const selectedIndices = Array.from(document.querySelectorAll('.contact-item input:checked')).map(i => parseInt(i.value));
             const filteredContacts = selectedIndices.map(idx => allContacts[idx]);
             const msgIdx = localStorage.getItem('temp_msg_idx') || 0;
+
             if(filteredContacts.length === 0) return alert("Veuillez sélectionner au moins un contact.");
+            
+            // Changement d'état visuel immédiat pour informer l'utilisateur du démarrage
+            document.getElementById('status-text').innerText = "⏳ Initialisation de la file d'envoi...";
+
             socket.emit('start_final_broadcast', { contacts: filteredContacts, messageIndex: msgIdx });
+            
+            // Nettoyage de l'UI
             document.getElementById('contact-selection-ui').classList.add('hidden');
             document.getElementById('main-controls').classList.remove('hidden');
         }

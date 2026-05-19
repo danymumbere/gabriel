@@ -13,6 +13,9 @@ const server = http.createServer(app);
 const io = new Server(server);
 const BASE_URL = process.env.BASE_URL || "https://gabriel-diffusion.onrender.com";
 
+// Variable pour mémoriser l'état de la connexion WhatsApp
+let isWhatsAppReady = false;
+
 const messagesEvangeliques = [
     "Le voleur ne vient que pour dérober, égorger et détruire; Jésus est venu afin que les brebis aient la vie et qu'elles soient dans l' abondance.",
     "Jésus est le chemin, la vérité et la vie. Nul ne vient au Père que par lui.",
@@ -35,6 +38,7 @@ const client = new Client({
 
 client.on('qr', async (qr) => {
     try {
+        isWhatsAppReady = false;
         const url = await QRCode.toDataURL(qr);
         io.emit('qr_code', url);
     } catch (err) {
@@ -43,10 +47,21 @@ client.on('qr', async (qr) => {
 });
 
 client.on('ready', () => {
+    isWhatsAppReady = true;
     io.emit('status', 'WhatsApp est connecté ! ✅');
 });
 
+client.on('disconnected', () => {
+    isWhatsAppReady = false;
+    io.emit('status', 'WhatsApp déconnecté ! ❌');
+});
+
 io.on('connection', (socket) => {
+    // Dès qu'un utilisateur (re)connecte sa page, on lui envoie l'état actuel de WhatsApp
+    if (isWhatsAppReady) {
+        socket.emit('status', 'WhatsApp est connecté ! ✅');
+    }
+
     socket.on('request_pairing_code', async (phoneNumber) => {
         try {
             const cleanNumber = phoneNumber.replace(/\D/g, '');
@@ -57,7 +72,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // NOUVEAU : Écoute l'ordre d'envoi final avec la liste filtrée
     socket.on('start_final_broadcast', async (data) => {
         const { contacts, messageIndex } = data;
         const messageBase = messagesEvangeliques[messageIndex];
@@ -81,14 +95,20 @@ async function envoyerMessagesEnMasse(contacts, messageBase) {
 
     for (const contact of contacts) {
         try {
-            const cleanNum = contact.numero.replace(/\D/g, '');
+            let cleanNum = contact.numero.replace(/\D/g, '');
+            
+            // Correction automatique pour la RDC : si le numéro commence par 0 et fait 10 chiffres (ex: 0906253050)
+            if (cleanNum.startsWith('0') && cleanNum.length === 10) {
+                cleanNum = '243' + cleanNum.substring(1);
+            }
+
             const chatId = `${cleanNum}@c.us`;
             await client.sendMessage(chatId, messageFinal);
             envoyés++;
             io.emit('progress', { current: envoyés, total: total, lastContact: contact.nom });
             await new Promise(resolve => setTimeout(resolve, Math.random() * 3000 + 2000));
         } catch (error) {
-            console.error(`❌ Échec pour ${contact.nom}`);
+            console.error(`❌ Échec pour ${contact.nom}:`, error.message);
         }
     }
     io.emit('finished', { total: envoyés });
@@ -126,7 +146,6 @@ app.get('/oauth2callback', async (req, res) => {
             }))
             .filter(c => c.numero);
 
-        // Au lieu d'envoyer, on renvoie une page qui contient les données et redirige
         const contactsJSON = JSON.stringify(contacts);
         res.send(`
             <script>
@@ -140,13 +159,8 @@ app.get('/oauth2callback', async (req, res) => {
     }
 });
 
-app.get('/privacy', (req, res) => {
-    res.sendFile(path.join(__dirname, 'privacy.html'));
-});
-
-app.get('/terms', (req, res) => {
-    res.sendFile(path.join(__dirname, 'terms.html'));
-});
+app.get('/privacy', (req, res) => { res.sendFile(path.join(__dirname, 'privacy.html')); });
+app.get('/terms', (req, res) => { res.sendFile(path.join(__dirname, 'terms.html')); });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => console.log(`Serveur lancé sur le port ${PORT}`));
