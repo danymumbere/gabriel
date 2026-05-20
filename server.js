@@ -30,9 +30,19 @@ const client = new Client({
   authStrategy: new LocalAuth({ dataPath: '/data/.wwebjs_auth' }),
   puppeteer: {
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-    args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
     headless: true,
-    handleSIGINT: false
+    handleSIGINT: false,
+    // AJOUT DE CES OPTIONS STRICTES POUR ÉCONOMISER LA RAM SUR RENDER
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',                // Désactive l'accélération graphique
+      '--no-zygote',                 // Évite de créer des processus enfants inutiles
+      '--single-process',            // Force Chromium à n'utiliser qu'un seul processus au lieu de plusieurs
+      '--disable-extensions',         // Désactive les extensions de navigateur
+      '--js-flags="--max-old-space-size=150"' // Limite l'utilisation mémoire du moteur Javascript
+    ]
   }
 });
 
