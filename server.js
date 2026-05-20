@@ -32,16 +32,14 @@ const client = new Client({
     executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
     headless: true,
     handleSIGINT: false,
-    // AJOUT DE CES OPTIONS STRICTES POUR ÉCONOMISER LA RAM SUR RENDER
     args: [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-gpu',                // Désactive l'accélération graphique
-      '--no-zygote',                 // Évite de créer des processus enfants inutiles
-      '--single-process',            // Force Chromium à n'utiliser qu'un seul processus au lieu de plusieurs
-      '--disable-extensions',         // Désactive les extensions de navigateur
-      '--js-flags="--max-old-space-size=150"' // Limite l'utilisation mémoire du moteur Javascript
+      '--disable-gpu',
+      '--no-zygote',
+      '--disable-extensions',
+      '--js-flags="--max-old-space-size=150"' // Limite la mémoire du moteur JS
     ]
   }
 });
