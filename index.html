@@ -133,6 +133,15 @@
             alert(`Campagne terminée ! ${data.total} messages envoyés.`);
         });
 
+        // Écouteur pour intercepter le manque de connexion WhatsApp
+        socket.on('erreur_diffusion', (msg) => {
+            alert(msg);
+            document.getElementById('status-text').innerText = msg;
+            // Réaffiche les commandes pour pouvoir réessayer
+            document.getElementById('contact-selection-ui').classList.remove('hidden');
+            document.getElementById('main-controls').classList.add('hidden');
+        });
+
         // Charger messages
         fetch('/messages').then(res => res.json()).then(data => {
             const group = document.getElementById('radio-group');

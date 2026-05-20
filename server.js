@@ -65,7 +65,6 @@ client.on('disconnected', () => {
 });
 
 io.on('connection', (socket) => {
-    // Dès qu'un utilisateur (re)connecte sa page, on lui envoie l'état actuel de WhatsApp
     if (isWhatsAppReady) {
         socket.emit('status', 'WhatsApp est connecté ! ✅');
     }
@@ -80,7 +79,11 @@ io.on('connection', (socket) => {
         }
     });
 
+    // SÉCURITÉ : On vérifie si WhatsApp est connecté avant de lancer
     socket.on('start_final_broadcast', async (data) => {
+        if (!isWhatsAppReady) {
+            return socket.emit('erreur_diffusion', "L'envoi a échoué : WhatsApp n'est pas encore prêt ou s'est déconnecté. Attendez que le statut affiche 'Connecté'.");
+        }
         const { contacts, messageIndex } = data;
         const messageBase = messagesEvangeliques[messageIndex];
         envoyerMessagesEnMasse(contacts, messageBase);
@@ -105,18 +108,25 @@ async function envoyerMessagesEnMasse(contacts, messageBase) {
         try {
             let cleanNum = contact.numero.replace(/\D/g, '');
             
-            // Correction automatique pour la RDC : si le numéro commence par 0 et fait 10 chiffres (ex: 0906253050)
+            // Ajustement RDC : Si 10 chiffres commençant par 0 (ex: 0906253050)
             if (cleanNum.startsWith('0') && cleanNum.length === 10) {
                 cleanNum = '243' + cleanNum.substring(1);
+            }
+            // Ajustement RDC : Si 9 chiffres sans le 0 (ex: 906253050)
+            else if (!cleanNum.startsWith('243') && cleanNum.length === 9) {
+                cleanNum = '243' + cleanNum;
             }
 
             const chatId = `${cleanNum}@c.us`;
             await client.sendMessage(chatId, messageFinal);
             envoyés++;
+            
             io.emit('progress', { current: envoyés, total: total, lastContact: contact.nom });
+            // Pause de sécurité entre les messages
             await new Promise(resolve => setTimeout(resolve, Math.random() * 3000 + 2000));
         } catch (error) {
-            console.error(`❌ Échec pour ${contact.nom}:`, error.message);
+            // Revoie l'erreur précise dans les logs de Render pour pouvoir diagnostiquer
+            console.error(`❌ Échec d'envoi pour ${contact.nom} (${contact.numero}):`, error.message);
         }
     }
     io.emit('finished', { total: envoyés });
