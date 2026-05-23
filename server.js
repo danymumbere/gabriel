@@ -13,9 +13,6 @@ const server = http.createServer(app);
 const io = new Server(server);
 const BASE_URL = process.env.BASE_URL || "https://gabriel-diffusion.onrender.com";
 
-// Variable pour mémoriser l'état de la connexion WhatsApp
-let isWhatsAppReady = false;
-
 const messagesEvangeliques = [
     "Le voleur ne vient que pour dérober, égorger et détruire; Jésus est venu afin que les brebis aient la vie et qu'elles soient dans l' abondance.",
     "Jésus est le chemin, la vérité et la vie. Nul ne vient au Père que par lui.",
@@ -26,6 +23,7 @@ const messagesEvangeliques = [
     "Mais à tous ceux qui l'ont reçue (la lumière), à ceux qui croient en son nom (Jésus), elle a donné le pouvoir de devenir enfants de Dieu, lesquels sont nés, non du sang, ni de la volonté de l'homme, mais de Dieu."
 ];
 
+// OPTIMISATION RAM : Arguments stricts pour empêcher le crash de Render
 const client = new Client({
   authStrategy: new LocalAuth({ dataPath: '/data/.wwebjs_auth' }),
   puppeteer: {
@@ -33,20 +31,21 @@ const client = new Client({
     headless: true,
     handleSIGINT: false,
     args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
+      '--no-sandbox', 
+      '--disable-setuid-sandbox', 
       '--disable-dev-shm-usage',
       '--disable-gpu',
       '--no-zygote',
       '--disable-extensions',
-      '--js-flags="--max-old-space-size=150"' // Limite la mémoire du moteur JS
+      '--js-flags="--max-old-space-size=150"' // Limite la mémoire du moteur JavaScript de Chromium
     ]
   }
 });
 
+let isWhatsAppReady = false;
+
 client.on('qr', async (qr) => {
     try {
-        isWhatsAppReady = false;
         const url = await QRCode.toDataURL(qr);
         io.emit('qr_code', url);
     } catch (err) {
@@ -61,7 +60,6 @@ client.on('ready', () => {
 
 client.on('disconnected', () => {
     isWhatsAppReady = false;
-    io.emit('status', 'WhatsApp déconnecté ! ❌');
 });
 
 io.on('connection', (socket) => {
@@ -79,10 +77,9 @@ io.on('connection', (socket) => {
         }
     });
 
-    // SÉCURITÉ : On vérifie si WhatsApp est connecté avant de lancer
     socket.on('start_final_broadcast', async (data) => {
         if (!isWhatsAppReady) {
-            return socket.emit('erreur_diffusion', "L'envoi a échoué : WhatsApp n'est pas encore prêt ou s'est déconnecté. Attendez que le statut affiche 'Connecté'.");
+            return socket.emit('erreur_diffusion', "L'envoi a échoué : WhatsApp s'est déconnecté suite au manque de mémoire. Reconnectez-vous.");
         }
         const { contacts, messageIndex } = data;
         const messageBase = messagesEvangeliques[messageIndex];
@@ -108,25 +105,20 @@ async function envoyerMessagesEnMasse(contacts, messageBase) {
         try {
             let cleanNum = contact.numero.replace(/\D/g, '');
             
-            // Ajustement RDC : Si 10 chiffres commençant par 0 (ex: 0906253050)
+            // Correction pour les numéros de la RDC
             if (cleanNum.startsWith('0') && cleanNum.length === 10) {
                 cleanNum = '243' + cleanNum.substring(1);
-            }
-            // Ajustement RDC : Si 9 chiffres sans le 0 (ex: 906253050)
-            else if (!cleanNum.startsWith('243') && cleanNum.length === 9) {
+            } else if (!cleanNum.startsWith('243') && cleanNum.length === 9) {
                 cleanNum = '243' + cleanNum;
             }
 
             const chatId = `${cleanNum}@c.us`;
             await client.sendMessage(chatId, messageFinal);
             envoyés++;
-            
             io.emit('progress', { current: envoyés, total: total, lastContact: contact.nom });
-            // Pause de sécurité entre les messages
             await new Promise(resolve => setTimeout(resolve, Math.random() * 3000 + 2000));
         } catch (error) {
-            // Revoie l'erreur précise dans les logs de Render pour pouvoir diagnostiquer
-            console.error(`❌ Échec d'envoi pour ${contact.nom} (${contact.numero}):`, error.message);
+            console.error(`❌ Échec pour ${contact.nom}:`, error.message);
         }
     }
     io.emit('finished', { total: envoyés });
@@ -151,9 +143,11 @@ app.get('/oauth2callback', async (req, res) => {
         const { tokens } = await oauth2Client.getToken(code);
         oauth2Client.setCredentials(tokens);
         const service = google.people({ version: 'v1', auth: oauth2Client });
+        
+        // OPTIMISATION RAM : On descend de 1000 à 400 pour éviter l'explosion de mémoire sur Render Free
         const response = await service.people.connections.list({
             resourceName: 'people/me',
-            pageSize: 1000,
+            pageSize: 400, 
             personFields: 'names,phoneNumbers',
         });
 
@@ -173,12 +167,13 @@ app.get('/oauth2callback', async (req, res) => {
             </script>
         `);
     } catch (error) {
+        console.error("Erreur OAuth:", error);
         res.status(500).send("Erreur de synchronisation.");
     }
 });
 
-app.get('/privacy', (req, res) => { res.sendFile(path.join(__dirname, 'privacy.html')); });
-app.get('/terms', (req, res) => { res.sendFile(path.join(__dirname, 'terms.html')); });
+app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
+app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html')));
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, '0.0.0.0', () => console.log(`Serveur lancé sur le port ${PORT}`));
