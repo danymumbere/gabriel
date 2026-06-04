@@ -14,7 +14,7 @@
         body { font-family: sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
         .container { max-width: 500px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); text-align: center; }
         .status { color: #25D366; font-weight: bold; margin: 10px 0; }
-        .pairing-section, .donation-menu, .contact-selection { margin-top: 20px; padding: 15px; border-top: 1px solid #eee; }
+        .pairing-section, .donation-menu { margin-top: 20px; padding: 15px; border-top: 1px solid #eee; }
         .pairing-code { font-size: 32px; font-weight: bold; color: #25D366; margin: 10px 0; }
         input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box; }
         button { background-color: #25D366; color: white; border: none; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
@@ -23,12 +23,8 @@
         details { text-align: left; background: #f9f9f9; padding: 10px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #eee; }
         summary { font-weight: bold; cursor: pointer; color: #555; outline: none; }
         details p, details ol { font-size: 0.85em; line-height: 1.4; margin: 10px 0 0 0; padding-left: 20px; }
-        .contact-list-scroll { max-height: 300px; overflow-y: auto; text-align: left; border: 1px solid #eee; padding: 10px; border-radius: 8px; margin-top: 10px; }
-        .contact-item { display: flex; align-items: center; padding: 8px; border-bottom: 1px solid #f9f9f9; }
-        .contact-item input { width: auto; margin-right: 10px; }
-        .hidden { display: none; }
-        .search-box { margin-bottom: 10px; }
         .spacer { height: 40px; }
+        .hidden { display: none; }
     </style>
 </head>
 <body>
@@ -43,7 +39,7 @@
                 <summary>Comment se connecter via QR Code ?</summary>
                 <ol>
                     <li>Ouvrez <b>WhatsApp</b> sur votre téléphone.</li>
-                    <li>Allez dans <b>Paramètres > Appareils connectés > Lier un appareil</b>.</li>
+                    <li>Allez dans <b>Paramètres &gt; Appareils connectés &gt; Lier un appareil</b>.</li>
                     <li>Orientez votre caméra vers l'écran pour <b>scanner le code QR</b> ci-dessous.</li>
                     <li>Une fois scanné, la connexion est automatique !</li>
                 </ol>
@@ -59,7 +55,7 @@
                     <li>Entrez votre numéro (ex: <b>243...</b>) dans le champ ci-dessous et cliquez sur <b>"Lier via numéro de téléphone"</b>.</li>
                     <li>Un code s'affiche.</li>
                     <li>Ouvrez votre <b>WhatsApp</b> sur le téléphone.</li>
-                    <li>Allez dans <b>Paramètres > Appareils connectés > Lier un appareil</b>.</li>
+                    <li>Allez dans <b>Paramètres &gt; Appareils connectés &gt; Lier un appareil</b>.</li>
                     <li>Au lieu de scanner, cliquez en bas sur <b>"Lier avec le numéro de téléphone à la place"</b>.</li>
                     <li>Saisissez le code affiché sur le site.</li>
                     <li><b>C'est fait !</b> Le serveur est maintenant connecté.</li>
@@ -70,20 +66,12 @@
             <div id="display-code" class="pairing-code"></div>
         </div>
 
-        <div id="contact-selection-ui" class="contact-selection hidden">
-            <h3>👥 Vos Contacts Google</h3>
-            <p><small>Décochez les personnes à exclure de l'envoi.</small></p>
-            <input type="text" id="search-contact" class="search-box" placeholder="Rechercher un nom..." onkeyup="filtrerAffichage()">
-            <div class="contact-list-scroll" id="list-container"></div>
-            <button onclick="validerEtEnvoyer()" style="background-color: #e67e22; margin-top: 15px;">🚀 Lancer l'envoi final</button>
-        </div>
-
         <div id="main-controls">
             <div class="message-list" id="radio-group">
                 <h3>Message à diffuser :</h3>
             </div>
             <button onclick="lancerSync()" id="btn-sync" style="background-color: #3498db;">
-                🔄 Synchroniser mes contacts Google
+                🔄 Synchroniser mes contacts Google et lancer l'envoi
             </button>
         </div>
 
@@ -110,8 +98,6 @@
 
     <script>
         const socket = io();
-        let allContacts = [];
-        let currentMessageIndex = 0;
 
         socket.on('qr_code', (url) => {
             document.getElementById('qr-image').src = url;
@@ -123,13 +109,15 @@
 
         socket.on('status', (msg) => {
             document.getElementById('status-text').innerText = msg;
-            document.getElementById('qr-section').classList.add('hidden');
-            document.getElementById('pairing-ui').classList.add('hidden');
+            if (msg.includes('connecté')) {
+                document.getElementById('qr-section').classList.add('hidden');
+                document.getElementById('pairing-ui').classList.add('hidden');
+            }
         });
 
         socket.on('progress', (data) => {
             document.getElementById('status-text').innerText =
-                `⏳ Envoi en cours : ${data.current} / ${data.total} (${data.lastContact})`;
+                `⏳ Envoi en cours : ${data.current} message(s) envoyé(s)${data.lastContact ? ` (${data.lastContact})` : ''}`;
         });
 
         socket.on('finished', (data) => {
@@ -141,8 +129,6 @@
         socket.on('erreur_diffusion', (msg) => {
             alert(msg);
             document.getElementById('status-text').innerText = msg;
-            document.getElementById('contact-selection-ui').classList.remove('hidden');
-            document.getElementById('main-controls').classList.add('hidden');
         });
 
         async function chargerMessages() {
@@ -161,60 +147,16 @@
             });
         }
 
-        async function chargerContactsDepuisToken(token) {
-            const res = await fetch(`/sync-data?token=${encodeURIComponent(token)}`);
-            if (!res.ok) {
-                throw new Error('Impossible de charger les contacts synchronisés.');
-            }
-
-            const data = await res.json();
-            allContacts = Array.isArray(data.contacts) ? data.contacts : [];
-            currentMessageIndex = Number(data.messageIndex || 0);
-
-            afficherListeContacts();
-
-            document.getElementById('contact-selection-ui').classList.remove('hidden');
-            document.getElementById('main-controls').classList.add('hidden');
-            document.getElementById('status-text').innerText = `✅ ${allContacts.length} contacts chargés.`;
-        }
-
         window.onload = async () => {
             await chargerMessages();
 
             const params = new URLSearchParams(window.location.search);
-            const syncToken = params.get('syncToken');
-
-            if (syncToken) {
-                try {
-                    await chargerContactsDepuisToken(syncToken);
-                    history.replaceState({}, '', '/');
-                } catch (err) {
-                    console.error(err);
-                    alert('La synchronisation des contacts a échoué ou a expiré.');
-                }
+            if (params.get('envoi') === '1') {
+                document.getElementById('status-text').innerText =
+                    "✅ Synchronisation lancée. L'envoi des messages a démarré.";
+                history.replaceState({}, '', '/');
             }
         };
-
-        function afficherListeContacts() {
-            const container = document.getElementById('list-container');
-            container.innerHTML = allContacts.map((c, i) => `
-                <div class="contact-item" data-name="${String(c.nom || '').toLowerCase()}">
-                    <input type="checkbox" checked id="c-${i}" value="${i}">
-                    <label for="c-${i}">
-                        <strong>${c.nom || 'Inconnu'}</strong><br>
-                        <small>${c.numero || ''}</small>
-                    </label>
-                </div>
-            `).join('');
-        }
-
-        function filtrerAffichage() {
-            const query = document.getElementById('search-contact').value.toLowerCase();
-            document.querySelectorAll('.contact-item').forEach(item => {
-                const name = item.getAttribute('data-name') || '';
-                item.style.display = name.includes(query) ? 'flex' : 'none';
-            });
-        }
 
         function lancerSync() {
             const checked = document.querySelector('input[name="evangile"]:checked');
@@ -225,30 +167,6 @@
         function demanderCode() {
             const num = document.getElementById('phone-input').value;
             if (num) socket.emit('request_pairing_code', num);
-        }
-
-        function validerEtEnvoyer() {
-            const selectedIndices = Array.from(document.querySelectorAll('.contact-item input:checked'))
-                .map(i => parseInt(i.value, 10));
-
-            const filteredContacts = selectedIndices.map(idx => allContacts[idx]).filter(Boolean);
-
-            if (filteredContacts.length === 0) {
-                return alert("Veuillez sélectionner au moins un contact.");
-            }
-
-            const checked = document.querySelector('input[name="evangile"]:checked');
-            const msgIdx = checked ? checked.value : currentMessageIndex;
-
-            document.getElementById('status-text').innerText = "⏳ Initialisation de la file d'envoi...";
-
-            socket.emit('start_final_broadcast', {
-                contacts: filteredContacts,
-                messageIndex: msgIdx
-            });
-
-            document.getElementById('contact-selection-ui').classList.add('hidden');
-            document.getElementById('main-controls').classList.remove('hidden');
         }
 
         function preparerDon(reseau, code) {

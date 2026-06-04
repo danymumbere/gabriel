@@ -1,6 +1,5 @@
 const path = require('path');
 require('dotenv').config();
-const { randomBytes } = require('crypto');
 const { google } = require('googleapis');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const QRCode = require('qrcode');
@@ -23,7 +22,8 @@ const io = new Server(server, {
 
 const BASE_URL = process.env.BASE_URL || 'https://gabriel-diffusion.onrender.com';
 const MAX_CONTACTS = Number(process.env.MAX_CONTACTS || 120);
-const SYNC_TTL_MS = Number(process.env.SYNC_TTL_MS || 10 * 60 * 1000);
+const PAGE_SIZE = Number(process.env.PAGE_SIZE || 50);
+const SEND_DELAY_MS = Number(process.env.SEND_DELAY_MS || 1200);
 
 const messagesEvangeliques = [
     "Le voleur ne vient que pour dérober, égorger et détruire; Jésus est venu afin que les brebis aient la vie et qu'elles soient dans l'abondance.",
@@ -34,22 +34,6 @@ const messagesEvangeliques = [
     "Car il y a un seul Dieu, et aussi un seul médiateur entre Dieu et les hommes, Jésus-Christ homme,",
     "Mais à tous ceux qui l'ont reçue (la lumière), à ceux qui croient en son nom (Jésus), elle a donné le pouvoir de devenir enfants de Dieu, lesquels sont nés, non du sang, ni de la volonté de l'homme, mais de Dieu."
 ];
-
-// Stockage temporaire des contacts, évite localStorage
-const tempSyncStore = new Map();
-
-setInterval(() => {
-    const now = Date.now();
-    for (const [token, value] of tempSyncStore.entries()) {
-        if (value.expiresAt <= now) {
-            tempSyncStore.delete(token);
-        }
-    }
-}, 60_000).unref();
-
-function createToken() {
-    return randomBytes(16).toString('hex');
-}
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
@@ -127,24 +111,9 @@ io.on('connection', (socket) => {
             const code = await client.requestPairingCode(cleanNumber);
             socket.emit('pairing_code', code);
         } catch (err) {
+            console.error('Erreur pairing:', err);
             socket.emit('error', 'Erreur lors de la génération du code.');
         }
-    });
-
-    socket.on('start_final_broadcast', async (data) => {
-        if (!isWhatsAppReady) {
-            return socket.emit('erreur_diffusion', "L'envoi a échoué : WhatsApp s'est déconnecté suite au manque de mémoire. Reconnectez-vous.");
-        }
-
-        const { contacts, messageIndex } = data || {};
-        const idx = Number(messageIndex || 0);
-        const messageBase = messagesEvangeliques[idx] || messagesEvangeliques[0];
-
-        if (!Array.isArray(contacts) || contacts.length === 0) {
-            return socket.emit('erreur_diffusion', 'Aucun contact valide à envoyer.');
-        }
-
-        envoyerMessagesEnMasse(contacts, messageBase);
     });
 });
 
@@ -156,34 +125,69 @@ const oauth2Client = new google.auth.OAuth2(
     `${BASE_URL}/oauth2callback`
 );
 
-async function envoyerMessagesEnMasse(contacts, messageBase) {
-    let envoyés = 0;
-    const total = contacts.length;
+async function envoyerMessagesParPages(messageBase) {
+    const service = google.people({ version: 'v1', auth: oauth2Client });
     const lienMouvement = `\n\n👉 Joindre le mouvement : ${BASE_URL}`;
     const messageFinal = messageBase + lienMouvement;
 
-    for (const contact of contacts) {
-        try {
-            const cleanNum = normaliserNumeroRdc(contact.numero);
-            if (!cleanNum) continue;
+    let sent = 0;
+    let pageToken = undefined;
 
-            const chatId = `${cleanNum}@c.us`;
-            await client.sendMessage(chatId, messageFinal);
+    io.emit('status', '✅ Synchronisation Google terminée. Lecture des contacts par lots...');
 
-            envoyés++;
-            io.emit('progress', {
-                current: envoyés,
-                total,
-                lastContact: contact.nom || 'Inconnu'
+    try {
+        while (sent < MAX_CONTACTS) {
+            const remaining = MAX_CONTACTS - sent;
+            const response = await service.people.connections.list({
+                resourceName: 'people/me',
+                pageSize: Math.min(PAGE_SIZE, remaining),
+                pageToken,
+                personFields: 'names,phoneNumbers'
             });
 
-            await sleep(1200);
-        } catch (error) {
-            console.error(`❌ Échec pour ${contact.nom || 'Inconnu'}:`, error.message);
-        }
-    }
+            const connections = Array.isArray(response.data.connections) ? response.data.connections : [];
+            if (connections.length === 0) {
+                break;
+            }
 
-    io.emit('finished', { total: envoyés });
+            for (const person of connections) {
+                if (sent >= MAX_CONTACTS) break;
+
+                const nom = person.names && person.names[0] ? person.names[0].displayName : 'Inconnu';
+                const numero = person.phoneNumbers && person.phoneNumbers[0] ? person.phoneNumbers[0].value : null;
+                const cleanNum = normaliserNumeroRdc(numero);
+
+                if (!cleanNum) {
+                    continue;
+                }
+
+                try {
+                    const chatId = `${cleanNum}@c.us`;
+                    await client.sendMessage(chatId, messageFinal);
+
+                    sent++;
+                    io.emit('progress', {
+                        current: sent,
+                        lastContact: nom
+                    });
+
+                    await sleep(SEND_DELAY_MS);
+                } catch (error) {
+                    console.error(`❌ Échec pour ${nom}:`, error.message);
+                }
+            }
+
+            pageToken = response.data.nextPageToken;
+            if (!pageToken) {
+                break;
+            }
+        }
+
+        io.emit('finished', { total: sent });
+    } catch (error) {
+        console.error('Erreur pendant l’envoi par pages:', error);
+        io.emit('erreur_diffusion', 'Erreur pendant la lecture ou l’envoi des contacts.');
+    }
 }
 
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
@@ -206,52 +210,18 @@ app.get('/oauth2callback', async (req, res) => {
         const { tokens } = await oauth2Client.getToken(code);
         oauth2Client.setCredentials(tokens);
 
-        const service = google.people({ version: 'v1', auth: oauth2Client });
+        const messageIndex = Number(state || 0);
+        const messageBase = messagesEvangeliques[messageIndex] || messagesEvangeliques[0];
 
-        const response = await service.people.connections.list({
-            resourceName: 'people/me',
-            pageSize: MAX_CONTACTS,
-            personFields: 'names,phoneNumbers'
-        });
+        io.emit('status', '✅ Auth Google reçue. Préparation de l’envoi...');
+        void envoyerMessagesParPages(messageBase);
 
-        const contacts = (response.data.connections || [])
-            .map(p => ({
-                nom: p.names && p.names[0] ? p.names[0].displayName : 'Inconnu',
-                numero: p.phoneNumbers && p.phoneNumbers[0] ? p.phoneNumbers[0].value : null
-            }))
-            .filter(c => c.numero)
-            .slice(0, MAX_CONTACTS);
-
-        const token = createToken();
-        tempSyncStore.set(token, {
-            contacts,
-            messageIndex: String(state || 0),
-            expiresAt: Date.now() + SYNC_TTL_MS
-        });
-
-        res.redirect(302, `/?syncToken=${token}`);
+        res.redirect(302, '/?envoi=1');
     } catch (error) {
         console.error("Erreur OAuth:", error);
+        io.emit('erreur_diffusion', 'Erreur de synchronisation ou d’envoi.');
         res.status(500).send("Erreur de synchronisation.");
     }
-});
-
-app.get('/sync-data', (req, res) => {
-    const token = req.query.token;
-
-    if (!token || !tempSyncStore.has(token)) {
-        return res.status(404).json({ error: 'Données de synchronisation introuvables ou expirées.' });
-    }
-
-    const payload = tempSyncStore.get(token);
-
-    // On supprime après lecture pour alléger la mémoire
-    tempSyncStore.delete(token);
-
-    res.json({
-        contacts: payload.contacts,
-        messageIndex: payload.messageIndex
-    });
 });
 
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
@@ -260,8 +230,7 @@ app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html'))
 app.get('/health', (req, res) => {
     res.json({
         ok: true,
-        whatsappReady: isWhatsAppReady,
-        tempSyncItems: tempSyncStore.size
+        whatsappReady: isWhatsAppReady
     });
 });
 
