@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gabriel - Diffusion Évangélique</title>
-    <link rel="SHORTCUT ICON" href="/images/logo_gabriel_deux.jpg">
+    <link rel="SHORTCUT ICON" href="https://gabriel-diffusion.onrender.com/images/logo_gabriel_deux.jpg">
     <meta property="og:title" content="Gabriel - Diffusion Évangélique">
     <meta property="og:description" content="Réveillez l'évangéliste qui est en vous (2 Timothée 1:7)" />
     <meta property="og:image" content="https://gabriel-diffusion.onrender.com/images/img_pub.jpg" />
@@ -97,94 +97,106 @@
     </p>
 
     <script>
-    const socket = io();
+        const socket = io();
 
-    socket.on('qr_code', (url) => {
-        document.getElementById('qr-image').src = url;
-    });
-
-    socket.on('pairing_code', (code) => {
-        document.getElementById('display-code').innerText = code;
-    });
-
-    socket.on('status', (msg) => {
-        document.getElementById('status-text').innerText = msg;
-        if (msg.includes('connecté')) {
-            document.getElementById('qr-section').classList.add('hidden');
-            document.getElementById('pairing-ui').classList.add('hidden');
-        }
-    });
-
-    socket.on('progress', (data) => {
-        document.getElementById('status-text').innerText =
-            `⏳ Envoi en cours : ${data.current} message(s) envoyé(s)${data.lastContact ? ` (${data.lastContact})` : ''}`;
-    });
-
-    socket.on('finished', (data) => {
-        document.getElementById('status-text').innerText =
-            `✅ Terminé ! ${data.total} messages envoyés avec succès.`;
-        alert(`Campagne terminée ! ${data.total} messages envoyés.`);
-    });
-
-    socket.on('erreur_diffusion', (msg) => {
-        alert(msg);
-        document.getElementById('status-text').innerText = msg;
-    });
-
-    async function chargerMessages() {
-        const res = await fetch('/messages');
-        const data = await res.json();
-
-        const group = document.getElementById('radio-group');
-        group.innerHTML = '<h3>Message à diffuser :</h3>';
-
-        data.forEach((msg, i) => {
-            group.innerHTML += `
-                <label style="display:block; text-align:left; font-size:0.9em; margin-bottom:5px; padding:5px; background:#f9f9f9; border-radius:4px;">
-                    <input type="radio" name="evangile" value="${i}" ${i === 0 ? 'checked' : ''}> ${msg}
-                </label>
-            `;
+        socket.on('qr_code', (url) => {
+            document.getElementById('qr-image').src = url;
         });
-    }
 
-    function appliquerMessageSelectionne(index) {
-        const radios = document.querySelectorAll('input[name="evangile"]');
-        radios.forEach(radio => {
-            radio.checked = Number(radio.value) === Number(index);
+        socket.on('pairing_code', (code) => {
+            document.getElementById('display-code').innerText = code;
         });
-    }
 
-    window.onload = async () => {
-        await chargerMessages();
+        socket.on('status', (msg) => {
+            document.getElementById('status-text').innerText = msg;
+            if (msg.includes('connecté')) {
+                document.getElementById('qr-section').classList.add('hidden');
+                document.getElementById('pairing-ui').classList.add('hidden');
+            }
+        });
 
-        const params = new URLSearchParams(window.location.search);
-        const msgIdx = Number(params.get('msgIdx') || 0);
-        appliquerMessageSelectionne(msgIdx);
-
-        if (params.get('envoi') === '1') {
+        socket.on('progress', (data) => {
             document.getElementById('status-text').innerText =
-                "✅ Synchronisation lancée. L'envoi des messages a démarré.";
-            history.replaceState({}, '', '/');
+                `⏳ Envoi en cours : ${data.current} message(s) envoyé(s)${data.lastContact ? ` (${data.lastContact})` : ''}`;
+        });
+
+        socket.on('finished', (data) => {
+            document.getElementById('status-text').innerText =
+                `✅ Terminé ! ${data.total} messages envoyés avec succès.`;
+            alert(`Campagne terminée ! ${data.total} messages envoyés.`);
+        });
+
+        socket.on('erreur_diffusion', (msg) => {
+            alert(msg);
+            document.getElementById('status-text').innerText = msg;
+        });
+
+        async function chargerMessages() {
+            const res = await fetch('/messages');
+            const data = await res.json();
+
+            const group = document.getElementById('radio-group');
+            group.innerHTML = '<h3>Message à diffuser :</h3>';
+
+            data.forEach((msg, i) => {
+                group.innerHTML += `
+                    <label style="display:block; text-align:left; font-size:0.9em; margin-bottom:5px; padding:5px; background:#f9f9f9; border-radius:4px;">
+                        <input type="radio" name="evangile" value="${i}" ${i === 0 ? 'checked' : ''}> ${msg}
+                    </label>
+                `;
+            });
         }
-    };
 
-    function lancerSync() {
-        const checked = document.querySelector('input[name="evangile"]:checked');
-        const idx = checked ? checked.value : 0;
-        window.location.href = `/auth?msgIdx=${idx}`;
-    }
+        function appliquerMessageSelectionne(index) {
+            const radios = document.querySelectorAll('input[name="evangile"]');
+            radios.forEach(radio => {
+                radio.checked = Number(radio.value) === Number(index);
+            });
+        }
 
-    function demanderCode() {
-        const num = document.getElementById('phone-input').value;
-        if (num) socket.emit('request_pairing_code', num);
-    }
+        window.onload = async () => {
+            await chargerMessages();
 
-    function preparerDon(reseau, code) {
-        const num = "0906253050";
-        navigator.clipboard.writeText(num);
-        alert("Numéro " + num + " copié ! Composez le " + code + " et suivez les étapes.");
-        window.location.href = "tel:" + code.replace("#", "%23");
-    }
-</script>
+            const params = new URLSearchParams(window.location.search);
+            const msgIdx = Number(params.get('msgIdx') || 0);
+            appliquerMessageSelectionne(msgIdx);
+
+            if (params.get('envoi') === '1') {
+                document.getElementById('status-text').innerText =
+                    "✅ Synchronisation lancée. Préparation de l'envoi...";
+
+                try {
+                    await fetch(`/start-broadcast?msgIdx=${encodeURIComponent(msgIdx)}`, {
+                        method: 'GET',
+                        cache: 'no-store'
+                    });
+                } catch (err) {
+                    console.error(err);
+                    document.getElementById('status-text').innerText =
+                        "Erreur au démarrage de l'envoi.";
+                }
+
+                history.replaceState({}, '', '/');
+            }
+        };
+
+        function lancerSync() {
+            const checked = document.querySelector('input[name="evangile"]:checked');
+            const idx = checked ? checked.value : 0;
+            window.location.href = `/auth?msgIdx=${idx}`;
+        }
+
+        function demanderCode() {
+            const num = document.getElementById('phone-input').value;
+            if (num) socket.emit('request_pairing_code', num);
+        }
+
+        function preparerDon(reseau, code) {
+            const num = "0906253050";
+            navigator.clipboard.writeText(num);
+            alert("Numéro " + num + " copié ! Composez le " + code + " et suivez les étapes.");
+            window.location.href = "tel:" + code.replace("#", "%23");
+        }
+    </script>
 </body>
 </html>

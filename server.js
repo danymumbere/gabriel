@@ -132,6 +132,11 @@ async function envoyerMessagesParPages(messageBase) {
         return;
     }
 
+    if (!isWhatsAppReady) {
+        io.emit('erreur_diffusion', "WhatsApp n'est pas encore connecté.");
+        return;
+    }
+
     broadcastRunning = true;
 
     const service = google.people({ version: 'v1', auth: oauth2Client });
@@ -142,7 +147,7 @@ async function envoyerMessagesParPages(messageBase) {
     let inspected = 0;
     let pageToken = undefined;
 
-    io.emit('status', '✅ Auth Google reçue. Lecture des contacts par lots...');
+    io.emit('status', '✅ Lecture des contacts par lots...');
 
     try {
         while (inspected < MAX_CONTACTS) {
@@ -174,7 +179,9 @@ async function envoyerMessagesParPages(messageBase) {
 
                 try {
                     const waNumber = await client.getNumberId(cleanNum);
+
                     if (!waNumber || !waNumber._serialized) {
+                        console.log(`Numéro non trouvé sur WhatsApp: ${nom} - ${cleanNum}`);
                         continue;
                     }
 
@@ -212,7 +219,7 @@ app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/messages', (req, res) => res.json(messagesEvangeliques));
 
 app.get('/auth', (req, res) => {
-    const msgIdx = req.query.msgIdx || "0";
+    const msgIdx = req.query.msgIdx || '0';
     const url = oauth2Client.generateAuthUrl({
         access_type: 'offline',
         scope: ['https://www.googleapis.com/auth/contacts.readonly'],
@@ -229,21 +236,35 @@ app.get('/oauth2callback', async (req, res) => {
         oauth2Client.setCredentials(tokens);
 
         const messageIndex = Number(state || 0);
-        const messageBase = messagesEvangeliques[messageIndex] || messagesEvangeliques[0];
 
         res.redirect(302, `/?envoi=1&msgIdx=${messageIndex}`);
-
-        setImmediate(() => {
-            envoyerMessagesParPages(messageBase).catch(err => {
-                console.error('Erreur en arrière-plan:', err);
-                io.emit('erreur_diffusion', 'Erreur inattendue pendant l’envoi.');
-            });
-        });
     } catch (error) {
-        console.error("Erreur OAuth:", error);
-        io.emit('erreur_diffusion', 'Erreur de synchronisation ou d’envoi.');
-        res.status(500).send("Erreur de synchronisation.");
+        console.error('Erreur OAuth:', error);
+        io.emit('erreur_diffusion', 'Erreur de synchronisation.');
+        res.status(500).send('Erreur de synchronisation.');
     }
+});
+
+app.get('/start-broadcast', async (req, res) => {
+    const messageIndex = Number(req.query.msgIdx || 0);
+    const messageBase = messagesEvangeliques[messageIndex] || messagesEvangeliques[0];
+
+    if (broadcastRunning) {
+        return res.status(409).json({ ok: false, message: 'Diffusion déjà en cours.' });
+    }
+
+    if (!oauth2Client.credentials || !oauth2Client.credentials.access_token) {
+        return res.status(401).json({ ok: false, message: 'Google non authentifié.' });
+    }
+
+    res.status(202).json({ ok: true, message: 'Diffusion lancée.' });
+
+    setImmediate(() => {
+        envoyerMessagesParPages(messageBase).catch(err => {
+            console.error('Erreur en arrière-plan:', err);
+            io.emit('erreur_diffusion', 'Erreur inattendue pendant l’envoi.');
+        });
+    });
 });
 
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
