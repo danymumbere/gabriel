@@ -237,11 +237,31 @@ app.get('/oauth2callback', async (req, res) => {
 
         const messageIndex = Number(state || 0);
 
-        res.redirect(302, `/?envoi=1&msgIdx=${messageIndex}`);
+        // Au lieu de rediriger la page, on ferme le popup Google 
+        // et on envoie un message à l'onglet principal pour lancer l'envoi.
+        res.send(`
+            <script>
+                if (window.opener) {
+                    window.opener.postMessage({ type: 'GOOGLE_AUTH_SUCCESS', msgIdx: ${messageIndex} }, '*');
+                    window.close();
+                } else {
+                    window.location.href = '/?envoi=1&msgIdx=${messageIndex}';
+                }
+            </script>
+        `);
     } catch (error) {
         console.error('Erreur OAuth:', error);
         io.emit('erreur_diffusion', 'Erreur de synchronisation.');
-        res.status(500).send('Erreur de synchronisation.');
+        res.send(`
+            <script>
+                if (window.opener) {
+                    window.opener.postMessage({ type: 'GOOGLE_AUTH_ERROR' }, '*');
+                    window.close();
+                } else {
+                    window.location.href = '/?error=1';
+                }
+            </script>
+        `);
     }
 });
 

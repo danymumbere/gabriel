@@ -66,7 +66,8 @@
             <div id="display-code" class="pairing-code"></div>
         </div>
 
-        <div id="main-controls">
+        <!-- On ajoute la classe "hidden" par défaut pour bloquer le clic prématuré -->
+        <div id="main-controls" class="hidden">
             <div class="message-list" id="radio-group">
                 <h3>Message à diffuser :</h3>
             </div>
@@ -109,9 +110,15 @@
 
         socket.on('status', (msg) => {
             document.getElementById('status-text').innerText = msg;
-            if (msg.includes('connecté')) {
+            // On utilise l'émoji ✅ pour être certain que c'est un statut connecté
+            if (msg.includes('✅')) {
                 document.getElementById('qr-section').classList.add('hidden');
                 document.getElementById('pairing-ui').classList.add('hidden');
+                document.getElementById('main-controls').classList.remove('hidden');
+            } else {
+                document.getElementById('main-controls').classList.add('hidden');
+                document.getElementById('qr-section').classList.remove('hidden');
+                document.getElementById('pairing-ui').classList.remove('hidden');
             }
         });
 
@@ -161,21 +168,14 @@
             const msgIdx = Number(params.get('msgIdx') || 0);
             appliquerMessageSelectionne(msgIdx);
 
+            // Fallback uniquement si le popup a été bloqué par le navigateur
             if (params.get('envoi') === '1') {
-                document.getElementById('status-text').innerText =
-                    "✅ Synchronisation lancée. Préparation de l'envoi...";
-
+                document.getElementById('status-text').innerText = "✅ Synchronisation lancée. Préparation de l'envoi...";
                 try {
-                    await fetch(`/start-broadcast?msgIdx=${encodeURIComponent(msgIdx)}`, {
-                        method: 'GET',
-                        cache: 'no-store'
-                    });
+                    await fetch(`/start-broadcast?msgIdx=${encodeURIComponent(msgIdx)}`);
                 } catch (err) {
                     console.error(err);
-                    document.getElementById('status-text').innerText =
-                        "Erreur au démarrage de l'envoi.";
                 }
-
                 history.replaceState({}, '', '/');
             }
         };
@@ -183,8 +183,32 @@
         function lancerSync() {
             const checked = document.querySelector('input[name="evangile"]:checked');
             const idx = checked ? checked.value : 0;
-            window.location.href = `/auth?msgIdx=${idx}`;
+            
+            // On ouvre la connexion Google dans un Popup pour NE PAS quitter WhatsApp
+            const width = 500;
+            const height = 600;
+            const left = (window.innerWidth - width) / 2;
+            const top = (window.innerHeight - height) / 2;
+            window.open(`/auth?msgIdx=${idx}`, 'GoogleAuth', `width=${width},height=${height},top=${top},left=${left}`);
+            
+            document.getElementById('status-text').innerText = "⏳ Validation Google en cours (vérifiez la nouvelle fenêtre)...";
         }
+
+        // Écouteur silencieux qui attend que le popup Google ait terminé
+        window.addEventListener('message', async (event) => {
+            if (event.origin !== window.location.origin) return;
+
+            if (event.data && event.data.type === 'GOOGLE_AUTH_SUCCESS') {
+                document.getElementById('status-text').innerText = "✅ Synchronisation réussie. Lancement de l'envoi...";
+                try {
+                    await fetch(`/start-broadcast?msgIdx=${encodeURIComponent(event.data.msgIdx)}`);
+                } catch (err) {
+                    document.getElementById('status-text').innerText = "Erreur au démarrage de l'envoi.";
+                }
+            } else if (event.data && event.data.type === 'GOOGLE_AUTH_ERROR') {
+                document.getElementById('status-text').innerText = "❌ Échec de la connexion Google.";
+            }
+        });
 
         function demanderCode() {
             const num = document.getElementById('phone-input').value;
