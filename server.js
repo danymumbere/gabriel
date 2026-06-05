@@ -22,8 +22,8 @@ const io = new Server(server, {
 
 const BASE_URL = process.env.BASE_URL || 'https://gabriel-diffusion.onrender.com';
 const MAX_CONTACTS = Number(process.env.MAX_CONTACTS || 120);
-const PAGE_SIZE = Number(process.env.PAGE_SIZE || 50);
-const SEND_DELAY_MS = Number(process.env.SEND_DELAY_MS || 1200);
+const PAGE_SIZE = 50;
+const SEND_DELAY_MS = 1200;
 
 const messagesEvangeliques = [
     "Le voleur ne vient que pour dérober, égorger et détruire; Jésus est venu afin que les brebis aient la vie et qu'elles soient dans l'abondance.",
@@ -75,6 +75,7 @@ const client = new Client({
 });
 
 let isWhatsAppReady = false;
+let broadcastRunning = false;
 
 client.on('qr', async (qr) => {
     try {
@@ -126,18 +127,27 @@ const oauth2Client = new google.auth.OAuth2(
 );
 
 async function envoyerMessagesParPages(messageBase) {
+    if (broadcastRunning) {
+        io.emit('erreur_diffusion', 'Une diffusion est déjà en cours.');
+        return;
+    }
+
+    broadcastRunning = true;
+
     const service = google.people({ version: 'v1', auth: oauth2Client });
     const lienMouvement = `\n\n👉 Joindre le mouvement : ${BASE_URL}`;
     const messageFinal = messageBase + lienMouvement;
 
     let sent = 0;
+    let inspected = 0;
     let pageToken = undefined;
 
-    io.emit('status', '✅ Synchronisation Google terminée. Lecture des contacts par lots...');
+    io.emit('status', '✅ Auth Google reçue. Lecture des contacts par lots...');
 
     try {
-        while (sent < MAX_CONTACTS) {
-            const remaining = MAX_CONTACTS - sent;
+        while (inspected < MAX_CONTACTS) {
+            const remaining = MAX_CONTACTS - inspected;
+
             const response = await service.people.connections.list({
                 resourceName: 'people/me',
                 pageSize: Math.min(PAGE_SIZE, remaining),
@@ -151,7 +161,8 @@ async function envoyerMessagesParPages(messageBase) {
             }
 
             for (const person of connections) {
-                if (sent >= MAX_CONTACTS) break;
+                if (inspected >= MAX_CONTACTS) break;
+                inspected++;
 
                 const nom = person.names && person.names[0] ? person.names[0].displayName : 'Inconnu';
                 const numero = person.phoneNumbers && person.phoneNumbers[0] ? person.phoneNumbers[0].value : null;
@@ -162,12 +173,17 @@ async function envoyerMessagesParPages(messageBase) {
                 }
 
                 try {
-                    const chatId = `${cleanNum}@c.us`;
-                    await client.sendMessage(chatId, messageFinal);
+                    const waNumber = await client.getNumberId(cleanNum);
+                    if (!waNumber || !waNumber._serialized) {
+                        continue;
+                    }
+
+                    await client.sendMessage(waNumber._serialized, messageFinal);
 
                     sent++;
                     io.emit('progress', {
                         current: sent,
+                        total: MAX_CONTACTS,
                         lastContact: nom
                     });
 
@@ -187,6 +203,8 @@ async function envoyerMessagesParPages(messageBase) {
     } catch (error) {
         console.error('Erreur pendant l’envoi par pages:', error);
         io.emit('erreur_diffusion', 'Erreur pendant la lecture ou l’envoi des contacts.');
+    } finally {
+        broadcastRunning = false;
     }
 }
 
@@ -213,10 +231,14 @@ app.get('/oauth2callback', async (req, res) => {
         const messageIndex = Number(state || 0);
         const messageBase = messagesEvangeliques[messageIndex] || messagesEvangeliques[0];
 
-        io.emit('status', '✅ Auth Google reçue. Préparation de l’envoi...');
-        void envoyerMessagesParPages(messageBase);
+        res.redirect(302, `/?envoi=1&msgIdx=${messageIndex}`);
 
-        res.redirect(302, '/?envoi=1');
+        setImmediate(() => {
+            envoyerMessagesParPages(messageBase).catch(err => {
+                console.error('Erreur en arrière-plan:', err);
+                io.emit('erreur_diffusion', 'Erreur inattendue pendant l’envoi.');
+            });
+        });
     } catch (error) {
         console.error("Erreur OAuth:", error);
         io.emit('erreur_diffusion', 'Erreur de synchronisation ou d’envoi.');
@@ -230,7 +252,8 @@ app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html'))
 app.get('/health', (req, res) => {
     res.json({
         ok: true,
-        whatsappReady: isWhatsAppReady
+        whatsappReady: isWhatsAppReady,
+        broadcastRunning
     });
 });
 
