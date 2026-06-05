@@ -86,9 +86,10 @@ client.on('qr', async (qr) => {
     }
 });
 
-client.on('ready', () => {
-    isWhatsAppReady = true;
-    io.emit('status', 'WhatsApp est connecté ! ✅');
+client.on('authenticated', () => {
+    console.log("Authentification validée par le téléphone.");
+    // Ce statut me préviendra que le téléphone a fait son travail
+    io.emit('status', '⏳ Téléchargement de l\'historique WhatsApp en cours... (Patientez 2 à 3 min)');
 });
 
 client.on('disconnected', () => {
