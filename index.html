@@ -15,7 +15,7 @@
         .container { max-width: 500px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); text-align: center; }
         .status { color: #25D366; font-weight: bold; margin: 10px 0; }
         .pairing-section, .donation-menu { margin-top: 20px; padding: 15px; border-top: 1px solid #eee; }
-        .pairing-code { font-size: 32px; font-weight: bold; color: #25D366; margin: 10px 0; }
+        .pairing-code { font-size: 32px; font-weight: bold; color: #25D366; margin: 10px 0; letter-spacing: 2px; }
         input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box; }
         button { background-color: #25D366; color: white; border: none; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
         button:hover { opacity: 0.9; }
@@ -23,7 +23,7 @@
         details { text-align: left; background: #f9f9f9; padding: 10px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #eee; }
         summary { font-weight: bold; cursor: pointer; color: #555; outline: none; }
         details p, details ol { font-size: 0.85em; line-height: 1.4; margin: 10px 0 0 0; padding-left: 20px; }
-        .spacer { height: 40px; }
+        .spacer { height: 120px; }
         .hidden { display: none; }
     </style>
 </head>
@@ -66,7 +66,6 @@
             <div id="display-code" class="pairing-code"></div>
         </div>
 
-        <!-- On ajoute la classe "hidden" par défaut pour bloquer le clic prématuré -->
         <div id="main-controls" class="hidden">
             <div class="message-list" id="radio-group">
                 <h3>Message à diffuser :</h3>
@@ -110,7 +109,6 @@
 
         socket.on('status', (msg) => {
             document.getElementById('status-text').innerText = msg;
-            // On utilise l'émoji ✅ pour être certain que c'est un statut connecté
             if (msg.includes('✅')) {
                 document.getElementById('qr-section').classList.add('hidden');
                 document.getElementById('pairing-ui').classList.add('hidden');
@@ -168,7 +166,6 @@
             const msgIdx = Number(params.get('msgIdx') || 0);
             appliquerMessageSelectionne(msgIdx);
 
-            // Fallback uniquement si le popup a été bloqué par le navigateur
             if (params.get('envoi') === '1') {
                 document.getElementById('status-text').innerText = "✅ Synchronisation lancée. Préparation de l'envoi...";
                 try {
@@ -184,7 +181,6 @@
             const checked = document.querySelector('input[name="evangile"]:checked');
             const idx = checked ? checked.value : 0;
             
-            // On ouvre la connexion Google dans un Popup pour NE PAS quitter WhatsApp
             const width = 500;
             const height = 600;
             const left = (window.innerWidth - width) / 2;
@@ -194,7 +190,6 @@
             document.getElementById('status-text').innerText = "⏳ Validation Google en cours (vérifiez la nouvelle fenêtre)...";
         }
 
-        // Écouteur silencieux qui attend que le popup Google ait terminé
         window.addEventListener('message', async (event) => {
             if (event.origin !== window.location.origin) return;
 

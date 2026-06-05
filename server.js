@@ -1,7 +1,8 @@
 const path = require('path');
 require('dotenv').config();
 const { google } = require('googleapis');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const pino = require('pino');
 const QRCode = require('qrcode');
 const express = require('express');
 const http = require('http');
@@ -41,67 +42,65 @@ function sleep(ms) {
 
 function normaliserNumeroRdc(numero) {
     let cleanNum = String(numero || '').replace(/\D/g, '');
-
     if (cleanNum.startsWith('0') && cleanNum.length === 10) {
         cleanNum = '243' + cleanNum.substring(1);
     } else if (!cleanNum.startsWith('243') && cleanNum.length === 9) {
         cleanNum = '243' + cleanNum;
     }
-
     return cleanNum;
 }
 
-const client = new Client({
-    authStrategy: new LocalAuth({ dataPath: '/data/.wwebjs_auth' }),
-    puppeteer: {
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-        headless: true,
-        handleSIGINT: false,
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu',
-            '--no-zygote',
-            '--disable-extensions',
-            '--disable-background-networking',
-            '--disable-default-apps',
-            '--disable-sync',
-            '--no-first-run',
-            '--mute-audio',
-            '--hide-scrollbars'
-        ]
-    }
-});
-
+// --- CONFIGURATION BAILEYS ---
+let sock;
 let isWhatsAppReady = false;
 let broadcastRunning = false;
 
-client.on('qr', async (qr) => {
-    try {
-        const url = await QRCode.toDataURL(qr);
-        io.emit('qr_code', url);
-    } catch (err) {
-        console.error('Erreur QR:', err);
-    }
-});
+async function connectToWhatsApp() {
+    // Sauvegarde la session dans un dossier local pour éviter de se reconnecter
+    const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
 
-client.on('authenticated', () => {
-    console.log("Authentification validée par le téléphone.");
-    // Ce statut me préviendra que le téléphone a fait son travail
-    io.emit('status', '⏳ Téléchargement de l\'historique WhatsApp en cours... (Patientez 2 à 3 min)');
-});
+    sock = makeWASocket({
+        auth: state,
+        printQRInTerminal: false,
+        logger: pino({ level: 'silent' }), // Masque les logs internes de Baileys
+        browser: ["Ubuntu", "Chrome", "20.0.04"] // Facilite le couplage par code
+    });
 
-client.on('disconnected', () => {
-    isWhatsAppReady = false;
-    io.emit('status', "WhatsApp s'est déconnecté.");
-});
+    sock.ev.on('creds.update', saveCreds);
 
-client.on('auth_failure', (msg) => {
-    isWhatsAppReady = false;
-    console.error('Auth failure:', msg);
-});
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
 
+        if (qr) {
+            try {
+                const url = await QRCode.toDataURL(qr);
+                io.emit('qr_code', url);
+            } catch (err) {
+                console.error('Erreur génération QR:', err);
+            }
+        }
+
+        if (connection === 'close') {
+            const shouldReconnect = (lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut);
+            isWhatsAppReady = false;
+            
+            if (shouldReconnect) {
+                io.emit('status', "Reconnexion à WhatsApp en cours...");
+                connectToWhatsApp(); // Reconnexion automatique
+            } else {
+                io.emit('status', "WhatsApp s'est déconnecté. Veuillez relier l'appareil.");
+            }
+        } else if (connection === 'open') {
+            isWhatsAppReady = true;
+            io.emit('status', 'WhatsApp est connecté ! ✅');
+        }
+    });
+}
+
+// Initialisation au démarrage
+connectToWhatsApp();
+
+// --- SOCKET.IO ---
 io.on('connection', (socket) => {
     if (isWhatsAppReady) {
         socket.emit('status', 'WhatsApp est connecté ! ✅');
@@ -110,17 +109,19 @@ io.on('connection', (socket) => {
     socket.on('request_pairing_code', async (phoneNumber) => {
         try {
             const cleanNumber = String(phoneNumber).replace(/\D/g, '');
-            const code = await client.requestPairingCode(cleanNumber);
-            socket.emit('pairing_code', code);
+            // Baileys a parfois besoin d'un léger délai pour générer le code
+            setTimeout(async () => {
+                const code = await sock.requestPairingCode(cleanNumber);
+                socket.emit('pairing_code', code);
+            }, 1000);
         } catch (err) {
             console.error('Erreur pairing:', err);
-            socket.emit('error', 'Erreur lors de la génération du code.');
+            socket.emit('error', 'Erreur lors de la génération du code. Vérifiez le numéro.');
         }
     });
 });
 
-client.initialize();
-
+// --- GOOGLE OAUTH & LOGIQUE D'ENVOI ---
 const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
@@ -132,14 +133,12 @@ async function envoyerMessagesParPages(messageBase) {
         io.emit('erreur_diffusion', 'Une diffusion est déjà en cours.');
         return;
     }
-
     if (!isWhatsAppReady) {
         io.emit('erreur_diffusion', "WhatsApp n'est pas encore connecté.");
         return;
     }
 
     broadcastRunning = true;
-
     const service = google.people({ version: 'v1', auth: oauth2Client });
     const lienMouvement = `\n\n👉 Joindre le mouvement : ${BASE_URL}`;
     const messageFinal = messageBase + lienMouvement;
@@ -153,7 +152,6 @@ async function envoyerMessagesParPages(messageBase) {
     try {
         while (inspected < MAX_CONTACTS) {
             const remaining = MAX_CONTACTS - inspected;
-
             const response = await service.people.connections.list({
                 resourceName: 'people/me',
                 pageSize: Math.min(PAGE_SIZE, remaining),
@@ -162,9 +160,7 @@ async function envoyerMessagesParPages(messageBase) {
             });
 
             const connections = Array.isArray(response.data.connections) ? response.data.connections : [];
-            if (connections.length === 0) {
-                break;
-            }
+            if (connections.length === 0) break;
 
             for (const person of connections) {
                 if (inspected >= MAX_CONTACTS) break;
@@ -174,19 +170,19 @@ async function envoyerMessagesParPages(messageBase) {
                 const numero = person.phoneNumbers && person.phoneNumbers[0] ? person.phoneNumbers[0].value : null;
                 const cleanNum = normaliserNumeroRdc(numero);
 
-                if (!cleanNum) {
-                    continue;
-                }
+                if (!cleanNum) continue;
 
                 try {
-                    const waNumber = await client.getNumberId(cleanNum);
+                    // Vérifie si le numéro possède un compte WhatsApp avec Baileys
+                    const [result] = await sock.onWhatsApp(cleanNum);
 
-                    if (!waNumber || !waNumber._serialized) {
+                    if (!result || !result.exists) {
                         console.log(`Numéro non trouvé sur WhatsApp: ${nom} - ${cleanNum}`);
                         continue;
                     }
 
-                    await client.sendMessage(waNumber._serialized, messageFinal);
+                    // Envoi du message via Baileys (utilise result.jid)
+                    await sock.sendMessage(result.jid, { text: messageFinal });
 
                     sent++;
                     io.emit('progress', {
@@ -202,20 +198,19 @@ async function envoyerMessagesParPages(messageBase) {
             }
 
             pageToken = response.data.nextPageToken;
-            if (!pageToken) {
-                break;
-            }
+            if (!pageToken) break;
         }
 
         io.emit('finished', { total: sent });
     } catch (error) {
-        console.error('Erreur pendant l’envoi par pages:', error);
+        console.error('Erreur pendant l’envoi:', error);
         io.emit('erreur_diffusion', 'Erreur pendant la lecture ou l’envoi des contacts.');
     } finally {
         broadcastRunning = false;
     }
 }
 
+// --- ROUTES EXPRESS ---
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'index.html')));
 app.get('/messages', (req, res) => res.json(messagesEvangeliques));
 
@@ -231,15 +226,11 @@ app.get('/auth', (req, res) => {
 
 app.get('/oauth2callback', async (req, res) => {
     const { code, state } = req.query;
-
     try {
         const { tokens } = await oauth2Client.getToken(code);
         oauth2Client.setCredentials(tokens);
-
         const messageIndex = Number(state || 0);
 
-        // Au lieu de rediriger la page, on ferme le popup Google 
-        // et on envoie un message à l'onglet principal pour lancer l'envoi.
         res.send(`
             <script>
                 if (window.opener) {
@@ -251,7 +242,6 @@ app.get('/oauth2callback', async (req, res) => {
             </script>
         `);
     } catch (error) {
-        console.error('Erreur OAuth:', error);
         io.emit('erreur_diffusion', 'Erreur de synchronisation.');
         res.send(`
             <script>
@@ -273,7 +263,6 @@ app.get('/start-broadcast', async (req, res) => {
     if (broadcastRunning) {
         return res.status(409).json({ ok: false, message: 'Diffusion déjà en cours.' });
     }
-
     if (!oauth2Client.credentials || !oauth2Client.credentials.access_token) {
         return res.status(401).json({ ok: false, message: 'Google non authentifié.' });
     }
@@ -290,14 +279,9 @@ app.get('/start-broadcast', async (req, res) => {
 
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));
 app.get('/terms', (req, res) => res.sendFile(path.join(__dirname, 'terms.html')));
-
 app.get('/health', (req, res) => {
-    res.json({
-        ok: true,
-        whatsappReady: isWhatsAppReady,
-        broadcastRunning
-    });
+    res.json({ ok: true, whatsappReady: isWhatsAppReady, broadcastRunning });
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, '0.0.0.0', () => console.log(`Serveur lancé sur le port ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => console.log(`Serveur lancé sur le port ${PORT} avec Baileys !`));
