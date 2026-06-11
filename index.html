@@ -1,14 +1,26 @@
 <!DOCTYPE html>
 <html lang="fr">
+<html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gabriel - Diffusion Évangélique</title>
+    
+    <!-- Liens et Icônes -->
     <link rel="SHORTCUT ICON" href="https://gabriel-diffusion.onrender.com/images/logo_gabriel_deux.jpg">
-    <meta property="og:title" content="Gabriel - Diffusion Évangélique">
+    <link rel="canonical" href="https://gabriel-diffusion.onrender.com">
+
+    <!-- Balises Open Graph Requises -->
+    <meta property="og:title" content="Gabriel - Diffusion Évangélique" />
+    <meta property="og:type" content="website" />
     <meta property="og:description" content="Réveillez l'évangéliste qui est en vous (2 Timothée 1:7)" />
     <meta property="og:image" content="https://gabriel-diffusion.onrender.com/images/img_pub.jpg" />
     <meta property="og:url" content="https://gabriel-diffusion.onrender.com" />
+    
+    <!-- Recommandations pour l'image og:image -->
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
     <script src="/socket.io/socket.io.js"></script>
     <style>
         body { font-family: sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
@@ -66,11 +78,11 @@
             <div id="display-code" class="pairing-code"></div>
         </div>
 
-        <div id="main-controls" class="hidden">
+        <div id="main-controls">
             <div class="message-list" id="radio-group">
                 <h3>Message à diffuser :</h3>
             </div>
-            <button onclick="lancerSync()" id="btn-sync" style="background-color: #3498db;">
+            <button onclick="lancerSync()" id="btn-sync" style="background-color: #3498db;" class="hidden">
                 🔄 Synchroniser mes contacts Google et lancer l'envoi
             </button>
         </div>
