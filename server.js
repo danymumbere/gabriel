@@ -140,7 +140,7 @@ async function envoyerMessagesParPages(messageBase) {
 
     broadcastRunning = true;
     const service = google.people({ version: 'v1', auth: oauth2Client });
-    const lienMouvement = `\n\n👉 Joindre le mouvement : ${BASE_URL}`;
+    const lienMouvement = `\n\n👉 Joindre le mouvement : https://gabriel-diffusion.netlify.app`;
     const messageFinal = messageBase + lienMouvement;
 
     let sent = 0;
