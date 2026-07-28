@@ -187,7 +187,7 @@ async function envoyerMessagesParPages(messageBase, excludedIds = []) {
 
     broadcastRunning = true;
     const excluded = new Set(Array.isArray(excludedIds) ? excludedIds : []);
-    const lienMouvement = `\n\n👉Joindre le mouvement: https://gabriel-diffusion.netlify.app\n 👉Recevoir Jésus: https://gabriel-diffusion.onrender.com/discipulat`;
+    const lienMouvement = `\n\n👉Joindre le mouvement: https://gabriel-diffusion.netlify.app \n👉Recevoir Jésus: https://gabriel-diffusion.onrender.com/discipulat`;
     const messageFinal = messageBase + lienMouvement;
 
     let sent = 0;
