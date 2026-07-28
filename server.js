@@ -7,9 +7,11 @@ const QRCode = require('qrcode');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const db = require('./db'); // Persistance MongoDB Atlas (journal privé du disciple)
 
 const app = express();
 app.disable('x-powered-by');
+app.use(express.json());
 
 app.use('/images', express.static(path.join(__dirname, 'images'), {
     maxAge: '7d',
@@ -26,7 +28,7 @@ const MAX_CONTACTS = Number(process.env.MAX_CONTACTS || 120);
 const PAGE_SIZE = 50;
 const SEND_DELAY_MS = 1200;
 
-const messagesEvangeliques = [
+let messagesEvangeliques = [
     "Le voleur ne vient que pour dérober, égorger et détruire; Jésus est venu afin que les brebis aient la vie et qu'elles soient dans l'abondance.",
     "Jésus est le chemin, la vérité et la vie. Nul ne vient au Père que par lui.",
     "Jésus revient bientôt!",
@@ -128,7 +130,52 @@ const oauth2Client = new google.auth.OAuth2(
     `${BASE_URL}/oauth2callback`
 );
 
-async function envoyerMessagesParPages(messageBase) {
+// Récupère tous les contacts Google (jusqu'à MAX_CONTACTS), avec leur
+// resourceName (identifiant stable utilisé pour l'exclusion). Pas de vérif
+// WhatsApp ici : on garde la lecture rapide pour l'UI d'exclusion. La boucle
+// d'envoi vérifiera l'existence WhatsApp au moment d'écrire.
+async function recupererContactsTous() {
+    const service = google.people({ version: 'v1', auth: oauth2Client });
+    const contacts = [];
+    let inspected = 0;
+    let pageToken = undefined;
+
+    while (inspected < MAX_CONTACTS) {
+        const remaining = MAX_CONTACTS - inspected;
+        const response = await service.people.connections.list({
+            resourceName: 'people/me',
+            pageSize: Math.min(PAGE_SIZE, remaining),
+            pageToken,
+            personFields: 'names,phoneNumbers'
+        });
+
+        const connections = Array.isArray(response.data.connections) ? response.data.connections : [];
+        if (connections.length === 0) break;
+
+        for (const person of connections) {
+            if (inspected >= MAX_CONTACTS) break;
+            inspected++;
+
+            const nom = person.names && person.names[0] ? person.names[0].displayName : 'Inconnu';
+            const numeroBrut = person.phoneNumbers && person.phoneNumbers[0] ? person.phoneNumbers[0].value : null;
+            const cleanNum = normaliserNumeroRdc(numeroBrut);
+
+            contacts.push({
+                id: person.resourceName, // identifiant Google stable
+                nom,
+                numero: cleanNum || null,
+                numeroBrut: numeroBrut || null
+            });
+        }
+
+        pageToken = response.data.nextPageToken;
+        if (!pageToken) break;
+    }
+
+    return contacts;
+}
+
+async function envoyerMessagesParPages(messageBase, excludedIds = []) {
     if (broadcastRunning) {
         io.emit('erreur_diffusion', 'Une diffusion est déjà en cours.');
         return;
@@ -139,66 +186,47 @@ async function envoyerMessagesParPages(messageBase) {
     }
 
     broadcastRunning = true;
-    const service = google.people({ version: 'v1', auth: oauth2Client });
+    const excluded = new Set(Array.isArray(excludedIds) ? excludedIds : []);
     const lienMouvement = `\n\n👉 Joindre le mouvement : https://gabriel-diffusion.netlify.app`;
     const messageFinal = messageBase + lienMouvement;
 
     let sent = 0;
-    let inspected = 0;
-    let pageToken = undefined;
-
     io.emit('status', '✅ Lecture des contacts par lots...');
 
     try {
-        while (inspected < MAX_CONTACTS) {
-            const remaining = MAX_CONTACTS - inspected;
-            const response = await service.people.connections.list({
-                resourceName: 'people/me',
-                pageSize: Math.min(PAGE_SIZE, remaining),
-                pageToken,
-                personFields: 'names,phoneNumbers'
-            });
+        const contacts = await recupererContactsTous();
 
-            const connections = Array.isArray(response.data.connections) ? response.data.connections : [];
-            if (connections.length === 0) break;
-
-            for (const person of connections) {
-                if (inspected >= MAX_CONTACTS) break;
-                inspected++;
-
-                const nom = person.names && person.names[0] ? person.names[0].displayName : 'Inconnu';
-                const numero = person.phoneNumbers && person.phoneNumbers[0] ? person.phoneNumbers[0].value : null;
-                const cleanNum = normaliserNumeroRdc(numero);
-
-                if (!cleanNum) continue;
-
-                try {
-                    // Vérifie si le numéro possède un compte WhatsApp avec Baileys
-                    const [result] = await sock.onWhatsApp(cleanNum);
-
-                    if (!result || !result.exists) {
-                        console.log(`Numéro non trouvé sur WhatsApp: ${nom} - ${cleanNum}`);
-                        continue;
-                    }
-
-                    // Envoi du message via Baileys (utilise result.jid)
-                    await sock.sendMessage(result.jid, { text: messageFinal });
-
-                    sent++;
-                    io.emit('progress', {
-                        current: sent,
-                        total: MAX_CONTACTS,
-                        lastContact: nom
-                    });
-
-                    await sleep(SEND_DELAY_MS);
-                } catch (error) {
-                    console.error(`❌ Échec pour ${nom}:`, error.message);
-                }
+        for (const contact of contacts) {
+            // Exclusion : contact retiré manuellement par l'utilisateur
+            if (excluded.has(contact.id)) {
+                console.log(`⏭️ Contact exclu : ${contact.nom}`);
+                continue;
             }
+            if (!contact.numero) continue;
 
-            pageToken = response.data.nextPageToken;
-            if (!pageToken) break;
+            try {
+                // Vérifie si le numéro possède un compte WhatsApp avec Baileys
+                const [result] = await sock.onWhatsApp(contact.numero);
+
+                if (!result || !result.exists) {
+                    console.log(`Numéro non trouvé sur WhatsApp: ${contact.nom} - ${contact.numero}`);
+                    continue;
+                }
+
+                // Envoi du message via Baileys (utilise result.jid)
+                await sock.sendMessage(result.jid, { text: messageFinal });
+
+                sent++;
+                io.emit('progress', {
+                    current: sent,
+                    total: contacts.length,
+                    lastContact: contact.nom
+                });
+
+                await sleep(SEND_DELAY_MS);
+            } catch (error) {
+                console.error(`❌ Échec pour ${contact.nom}:`, error.message);
+            }
         }
 
         io.emit('finished', { total: sent });
@@ -256,8 +284,27 @@ app.get('/oauth2callback', async (req, res) => {
     }
 });
 
-app.get('/start-broadcast', async (req, res) => {
-    const messageIndex = Number(req.query.msgIdx || 0);
+// Liste les contacts Google pour l'UI d'exclusion (avant envoi)
+app.get('/contacts', async (req, res) => {
+    if (!oauth2Client.credentials || !oauth2Client.credentials.access_token) {
+        return res.status(401).json({ ok: false, message: 'Google non authentifié.' });
+    }
+    try {
+        const contacts = await recupererContactsTous();
+        res.json({
+            ok: true,
+            total: contacts.length,
+            contacts: contacts.map(c => ({ id: c.id, nom: c.nom, numero: c.numero }))
+        });
+    } catch (err) {
+        console.error('Erreur lecture contacts:', err.message);
+        res.status(500).json({ ok: false, message: 'Erreur de lecture des contacts Google.' });
+    }
+});
+
+app.post('/start-broadcast', async (req, res) => {
+    const messageIndex = Number(req.body?.msgIdx || 0);
+    const excludedIds = Array.isArray(req.body?.excludedIds) ? req.body.excludedIds : [];
     const messageBase = messagesEvangeliques[messageIndex] || messagesEvangeliques[0];
 
     if (broadcastRunning) {
@@ -270,11 +317,105 @@ app.get('/start-broadcast', async (req, res) => {
     res.status(202).json({ ok: true, message: 'Diffusion lancée.' });
 
     setImmediate(() => {
-        envoyerMessagesParPages(messageBase).catch(err => {
+        envoyerMessagesParPages(messageBase, excludedIds).catch(err => {
             console.error('Erreur en arrière-plan:', err);
             io.emit('erreur_diffusion', 'Erreur inattendue pendant l’envoi.');
         });
     });
+});
+
+// Route pour chercher sur API.Bible
+app.get('/search-bible', async (req, res) => {
+    const query = req.query.q;
+    const apiKey = process.env.BIBLE_API_KEY;
+    const bibleId = process.env.BIBLE_ID || 'f72b840c855f362c-04'; // Par défaut : Louis Segond 1910
+
+    if (!apiKey) return res.status(500).json({ error: "Clé API.Bible non configurée." });
+
+    try {
+        const response = await fetch(`https://api.scripture.api.bible/v1/bibles/${bibleId}/search?query=${encodeURIComponent(query)}`, {
+            headers: { 'api-key': apiKey }
+        });
+        const data = await response.json();
+        
+        if (data.data && data.data.passages && data.data.passages.length > 0) {
+            // L'API renvoie du HTML, on utilise une regex pour extraire uniquement le texte
+            let text = data.data.passages[0].content.replace(/<\/?[^>]+(>|$)/g, "").trim();
+            let ref = data.data.passages[0].reference;
+            res.json({ success: true, text: `${text} (${ref})` });
+        } else {
+            res.json({ success: false, message: "Aucun verset trouvé pour cette référence." });
+        }
+    } catch (error) {
+        console.error("Erreur API Bible:", error);
+        res.status(500).json({ error: "Erreur de communication avec API.Bible." });
+    }
+});
+
+// Route pour ajouter dynamiquement un verset à la liste
+app.post('/add-message', (req, res) => {
+    const { message } = req.body;
+    if (message) {
+        messagesEvangeliques.push(message);
+        res.json({ success: true, index: messagesEvangeliques.length - 1 });
+    } else {
+        res.status(400).json({ success: false });
+    }
+});
+
+// --- ROADMAP DU DISCIPLE & JOURNAL PRIVÉ ---
+app.get('/discipulat', (req, res) => res.sendFile(path.join(__dirname, 'discipulat.html')));
+
+// Liste les entrées du journal d'un utilisateur
+app.get('/api/journal', async (req, res) => {
+    const userId = String(req.query.userId || '');
+    if (!userId) return res.status(400).json({ success: false, message: 'userId manquant.' });
+    if (!db.isConfigured()) {
+        return res.json({ success: true, entries: [], message: 'Journal non configuré (MONGODB_URI absent).' });
+    }
+    try {
+        const entries = await db.listEntries(userId);
+        res.json({ success: true, entries });
+    } catch (err) {
+        console.error('Erreur liste journal:', err.message);
+        res.status(500).json({ success: false, message: 'Erreur de lecture du journal.' });
+    }
+});
+
+// Crée une entrée de journal
+app.post('/api/journal', async (req, res) => {
+    const { userId, stepKey, content } = req.body || {};
+    if (!userId || !content) {
+        return res.status(400).json({ success: false, message: 'userId et content sont requis.' });
+    }
+    if (!db.isConfigured()) {
+        return res.status(503).json({ success: false, message: 'Journal non configuré (MONGODB_URI absent).' });
+    }
+    try {
+        const entry = await db.addEntry({ userId: String(userId), stepKey, content });
+        res.json({ success: true, entry });
+    } catch (err) {
+        console.error('Erreur ajout journal:', err.message);
+        res.status(500).json({ success: false, message: 'Erreur d\'enregistrement.' });
+    }
+});
+
+// Supprime une entrée (vérif d'appartenance)
+app.delete('/api/journal/:id', async (req, res) => {
+    const { id } = req.params;
+    const userId = String(req.query.userId || '');
+    if (!userId) return res.status(400).json({ success: false, message: 'userId manquant.' });
+    if (!db.isConfigured()) {
+        return res.status(503).json({ success: false, message: 'Journal non configuré (MONGODB_URI absent).' });
+    }
+    try {
+        const ok = await db.deleteEntry(id, userId);
+        if (ok) res.json({ success: true });
+        else res.status(404).json({ success: false, message: 'Entrée introuvable ou non autorisée.' });
+    } catch (err) {
+        console.error('Erreur suppression journal:', err.message);
+        res.status(500).json({ success: false, message: 'Erreur de suppression.' });
+    }
 });
 
 app.get('/privacy', (req, res) => res.sendFile(path.join(__dirname, 'privacy.html')));

@@ -37,6 +37,52 @@
         details p, details ol { font-size: 0.85em; line-height: 1.4; margin: 10px 0 0 0; padding-left: 20px; }
         .spacer { height: 120px; }
         .hidden { display: none; }
+        /* Modale d'exclusion de contacts */
+        .modal-overlay {
+            display: none;
+            position: fixed; inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 20px;
+            overflow-y: auto;
+        }
+        .modal-overlay.ouvert { display: flex; }
+        .modal-box {
+            background: #fff;
+            border-radius: 12px;
+            padding: 20px;
+            max-width: 480px;
+            width: 100%;
+            box-sizing: border-box;
+            margin: auto;
+        }
+        .modal-box h3 { margin-top: 0; color: #2c3e50; }
+        .contact-list {
+            max-height: 300px;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            border-radius: 8px;
+            margin: 10px 0;
+            text-align: left;
+        }
+        .contact-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            border-bottom: 1px solid #f0f0f0;
+            font-size: 0.9em;
+        }
+        .contact-item:last-child { border-bottom: none; }
+        .contact-item input { width: auto; margin: 0; }
+        .contact-item .nom { flex: 1; }
+        .contact-item .num { color: #888; font-size: 0.85em; }
+        .modal-actions { display: flex; gap: 10px; margin-top: 10px; }
+        .modal-actions button { margin: 0; }
+        .btn-secondaire { background: #95a5a6 !important; }
+        .compteur { font-size: 0.85em; color: #555; margin: 5px 0; }
     </style>
 </head>
 <body>
@@ -82,6 +128,14 @@
             <div class="message-list" id="radio-group">
                 <h3>Message à diffuser :</h3>
             </div>
+            <div style="margin-top: 15px; padding: 15px; background: #eef2f3; border-radius: 8px; border: 1px solid #d5dbdb;">
+                <h4 style="margin-top: 0; color: #2c3e50;">Chercher un autre verset</h4>
+                <p style="font-size: 0.85em; color: #7f8c8d; margin-bottom: 10px; text-align: left;">Recherchez une référence (ex: Jean 3:16) via API.Bible</p>
+                <input type="text" id="bible-search-input" placeholder="Ex: Jean 3:16" style="margin-bottom: 10px;">
+                <button onclick="rechercherVerset()" style="background-color: #34495e;">🔍 Chercher le verset</button>
+                <div id="bible-search-result" style="margin-top: 10px; font-size: 0.9em; font-style: italic; font-weight: bold;"></div>
+                <button id="btn-add-verse" onclick="ajouterVersetTrouve()" class="hidden" style="background-color: #f39c12; margin-top: 10px;">➕ Utiliser ce verset</button>
+            </div>
             <button onclick="lancerSync()" id="btn-sync" style="background-color: #3498db;" class="hidden">
                 🔄 Synchroniser mes contacts Google et lancer l'envoi
             </button>
@@ -103,7 +157,22 @@
         </div>
     </div>
 
+    <!-- Modale d'exclusion de contacts (ouverte après l'auth Google) -->
+    <div class="modal-overlay" id="contacts-modal">
+        <div class="modal-box">
+            <h3>👥 Sélection des destinataires</h3>
+            <p style="font-size:0.85em; color:#555; text-align:left;">Décoche les contacts que tu ne souhaites pas contacter, puis confirme.</p>
+            <div class="compteur" id="compteur-contacts"></div>
+            <div class="contact-list" id="contact-list"></div>
+            <div class="modal-actions">
+                <button onclick="confirmerEnvoi()" id="btn-confirmer-envoi">✉️ Confirmer et envoyer</button>
+                <button onclick="fermerModalContacts()" class="btn-secondaire">Annuler</button>
+            </div>
+        </div>
+    </div>
+
     <p style="margin-top:30px; font-size:0.9em; text-align: center;">
+        <a href="/discipulat">🌱 Le parcours du disciple</a> |
         <a href="/privacy" target="_blank">Politique de confidentialité</a> |
         <a href="/terms" target="_blank">Conditions d'utilisation</a>
     </p>
@@ -148,6 +217,17 @@
             document.getElementById('status-text').innerText = msg;
         });
 
+        // Échappe le HTML pour éviter les injections (XSS) et la cassure
+        // d'affichage si un verset contient <, >, " ou '.
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
         async function chargerMessages() {
             const res = await fetch('/messages');
             const data = await res.json();
@@ -158,7 +238,7 @@
             data.forEach((msg, i) => {
                 group.innerHTML += `
                     <label style="display:block; text-align:left; font-size:0.9em; margin-bottom:5px; padding:5px; background:#f9f9f9; border-radius:4px;">
-                        <input type="radio" name="evangile" value="${i}" ${i === 0 ? 'checked' : ''}> ${msg}
+                        <input type="radio" name="evangile" value="${i}" ${i === 0 ? 'checked' : ''}> ${escapeHtml(msg)}
                     </label>
                 `;
             });
@@ -180,8 +260,10 @@
 
             if (params.get('envoi') === '1') {
                 document.getElementById('status-text').innerText = "✅ Synchronisation lancée. Préparation de l'envoi...";
+                msgIdxCourant = msgIdx;
                 try {
-                    await fetch(`/start-broadcast?msgIdx=${encodeURIComponent(msgIdx)}`);
+                    // Repli (sans fenêtre opener) : on ouvre la sélection de contacts
+                    await ouvrirModalContacts();
                 } catch (err) {
                     console.error(err);
                 }
@@ -189,16 +271,79 @@
             }
         };
 
+        let versetTemporaire = "";
+
+        async function rechercherVerset() {
+            const query = document.getElementById('bible-search-input').value;
+            if (!query) return;
+
+            const resultDiv = document.getElementById('bible-search-result');
+            const btnAdd = document.getElementById('btn-add-verse');
+            
+            resultDiv.innerText = "Recherche en cours...";
+            resultDiv.style.color = "#333";
+            btnAdd.classList.add('hidden');
+
+            try {
+                const res = await fetch(`/search-bible?q=${encodeURIComponent(query)}`);
+                const data = await res.json();
+
+                if (data.success) {
+                    versetTemporaire = data.text;
+                    resultDiv.innerText = versetTemporaire;
+                    resultDiv.style.color = "#27ae60"; // Vert
+                    btnAdd.classList.remove('hidden');
+                } else {
+                    resultDiv.innerText = data.message || data.error || "Introuvable. Vérifiez la référence.";
+                    resultDiv.style.color = "#e74c3c"; // Rouge
+                }
+            } catch (err) {
+                resultDiv.innerText = "Erreur de connexion au serveur.";
+                resultDiv.style.color = "#e74c3c";
+            }
+        }
+
+        async function ajouterVersetTrouve() {
+            if (!versetTemporaire) return;
+            
+            try {
+                const res = await fetch('/add-message', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: versetTemporaire })
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    // 1. Recharge tous les messages (incluant le nouveau)
+                    await chargerMessages();
+                    // 2. Sélectionne le nouveau bouton radio généré
+                    appliquerMessageSelectionne(data.index);
+                    
+                    document.getElementById('bible-search-result').innerText = "✅ Verset ajouté et prêt pour la diffusion !";
+                    document.getElementById('btn-add-verse').classList.add('hidden');
+                    document.getElementById('bible-search-input').value = "";
+                    versetTemporaire = "";
+                }
+            } catch (err) {
+                alert("Erreur lors de l'ajout du verset.");
+            }
+        }
+
+        // --- Flux d'exclusion de contacts ---
+        let msgIdxCourant = 0;
+        let contactsCharges = []; // [{ id, nom, numero }]
+
         function lancerSync() {
             const checked = document.querySelector('input[name="evangile"]:checked');
-            const idx = checked ? checked.value : 0;
-            
+            msgIdxCourant = checked ? Number(checked.value) : 0;
+
             const width = 500;
             const height = 600;
             const left = (window.innerWidth - width) / 2;
             const top = (window.innerHeight - height) / 2;
-            window.open(`/auth?msgIdx=${idx}`, 'GoogleAuth', `width=${width},height=${height},top=${top},left=${left}`);
-            
+            window.open(`/auth?msgIdx=${msgIdxCourant}`, 'GoogleAuth', `width=${width},height=${height},top=${top},left=${left}`);
+
             document.getElementById('status-text').innerText = "⏳ Validation Google en cours (vérifiez la nouvelle fenêtre)...";
         }
 
@@ -206,16 +351,96 @@
             if (event.origin !== window.location.origin) return;
 
             if (event.data && event.data.type === 'GOOGLE_AUTH_SUCCESS') {
-                document.getElementById('status-text').innerText = "✅ Synchronisation réussie. Lancement de l'envoi...";
-                try {
-                    await fetch(`/start-broadcast?msgIdx=${encodeURIComponent(event.data.msgIdx)}`);
-                } catch (err) {
-                    document.getElementById('status-text').innerText = "Erreur au démarrage de l'envoi.";
-                }
+                msgIdxCourant = Number(event.data.msgIdx || msgIdxCourant);
+                document.getElementById('status-text').innerText = "✅ Synchronisation réussie. Chargement des contacts...";
+                await ouvrirModalContacts();
             } else if (event.data && event.data.type === 'GOOGLE_AUTH_ERROR') {
                 document.getElementById('status-text').innerText = "❌ Échec de la connexion Google.";
             }
         });
+
+        async function ouvrirModalContacts() {
+            const overlay = document.getElementById('contacts-modal');
+            const list = document.getElementById('contact-list');
+            const compteur = document.getElementById('compteur-contacts');
+            list.innerHTML = '<p style="padding:10px; color:#888;">Chargement des contacts...</p>';
+            compteur.innerText = '';
+            overlay.classList.add('ouvert');
+
+            try {
+                const res = await fetch('/contacts');
+                const data = await res.json();
+                if (!data.ok) throw new Error(data.message || 'Échec');
+                contactsCharges = data.contacts || [];
+
+                if (contactsCharges.length === 0) {
+                    list.innerHTML = '<p style="padding:10px; color:#c0392b;">Aucun contact trouvé.</p>';
+                    return;
+                }
+
+                list.innerHTML = contactsCharges.map(c => `
+                    <label class="contact-item">
+                        <input type="checkbox" checked data-id="${escapeHtml(c.id)}">
+                        <span class="nom">${escapeHtml(c.nom)}</span>
+                        <span class="num">${escapeHtml(c.numero || '')}</span>
+                    </label>
+                `).join('');
+
+                // Réagit aux changements de cases
+                list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    cb.addEventListener('change', majCompteur);
+                });
+                majCompteur();
+            } catch (err) {
+                list.innerHTML = `<p style="padding:10px; color:#c0392b;">⚠️ ${escapeHtml(err.message || 'Erreur')}</p>`;
+            }
+        }
+
+        function majCompteur() {
+            const total = contactsCharges.length;
+            const exclus = document.querySelectorAll('#contact-list input[type="checkbox"]:not(:checked)').length;
+            const sel = total - exclus;
+            document.getElementById('compteur-contacts').innerText =
+                `${sel} contact(s) sélectionné(s) — ${exclus} exclu(s) sur ${total}`;
+        }
+
+        function fermerModalContacts() {
+            document.getElementById('contacts-modal').classList.remove('ouvert');
+        }
+
+        async function confirmerEnvoi() {
+            // On rassemble les IDs exclus (cases décochées)
+            const excludedIds = Array.from(
+                document.querySelectorAll('#contact-list input[type="checkbox"]:not(:checked)')
+            ).map(cb => cb.dataset.id);
+
+            const btn = document.getElementById('btn-confirmer-envoi');
+            btn.disabled = true;
+            btn.innerText = 'Envoi en cours...';
+            document.getElementById('status-text').innerText = "⏳ Lancement de l'envoi...";
+
+            try {
+                const res = await fetch('/start-broadcast', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ msgIdx: msgIdxCourant, excludedIds })
+                });
+                const data = await res.json();
+                if (data.ok) {
+                    fermerModalContacts();
+                    document.getElementById('status-text').innerText =
+                        `✅ Envoi lancé${excludedIds.length ? ` (${excludedIds.length} exclu(s))` : ''}.`;
+                } else {
+                    alert(data.message || 'Erreur au démarrage.');
+                    document.getElementById('status-text').innerText = "❌ Échec du démarrage.";
+                }
+            } catch (err) {
+                alert('Erreur de connexion au serveur.');
+            } finally {
+                btn.disabled = false;
+                btn.innerText = '✉️ Confirmer et envoyer';
+            }
+        }
 
         function demanderCode() {
             const num = document.getElementById('phone-input').value;
