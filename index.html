@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="fr">
-<html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -124,6 +123,7 @@
             <div id="display-code" class="pairing-code"></div>
         </div>
 
+        <!-- Les messages sont toujours visibles dès le chargement -->
         <div id="main-controls">
             <div class="message-list" id="radio-group">
                 <h3>Message à diffuser :</h3>
@@ -136,6 +136,8 @@
                 <div id="bible-search-result" style="margin-top: 10px; font-size: 0.9em; font-style: italic; font-weight: bold;"></div>
                 <button id="btn-add-verse" onclick="ajouterVersetTrouve()" class="hidden" style="background-color: #f39c12; margin-top: 10px;">➕ Utiliser ce verset</button>
             </div>
+            
+            <!-- Ce bouton reste caché jusqu'à ce que WhatsApp soit connecté -->
             <button onclick="lancerSync()" id="btn-sync" style="background-color: #3498db;" class="hidden">
                 🔄 Synchroniser mes contacts Google et lancer l'envoi
             </button>
@@ -191,13 +193,15 @@
         socket.on('status', (msg) => {
             document.getElementById('status-text').innerText = msg;
             if (msg.includes('✅')) {
+                // WhatsApp connecté -> On masque QR/appariement et on affiche UNIQUEMENT le bouton d'envoi
                 document.getElementById('qr-section').classList.add('hidden');
                 document.getElementById('pairing-ui').classList.add('hidden');
-                document.getElementById('main-controls').classList.remove('hidden');
+                document.getElementById('btn-sync').classList.remove('hidden');
             } else {
-                document.getElementById('main-controls').classList.add('hidden');
+                // WhatsApp déconnecté/en attente -> On affiche QR/appariement et on cache le bouton d'envoi
                 document.getElementById('qr-section').classList.remove('hidden');
                 document.getElementById('pairing-ui').classList.remove('hidden');
+                document.getElementById('btn-sync').classList.add('hidden');
             }
         });
 
