@@ -326,29 +326,77 @@ app.post('/start-broadcast', async (req, res) => {
 
 // Route pour chercher sur API.Bible
 app.get('/search-bible', async (req, res) => {
-    const query = req.query.q;
+    const query = String(req.query.q || '').trim();
     const apiKey = process.env.BIBLE_API_KEY;
-    const bibleId = process.env.BIBLE_ID || 'f72b840c855f362c-04'; // Par défaut : Louis Segond 1910
+    const bibleId = process.env.BIBLE_ID || 'f72b840c855f362c-04';
 
-    if (!apiKey) return res.status(500).json({ error: "Clé API.Bible non configurée." });
+    if (!query) {
+        return res.status(400).json({ success: false, message: "Référence vide." });
+    }
+
+    if (!apiKey) {
+        return res.status(500).json({ success: false, message: "Clé API.Bible non configurée." });
+    }
 
     try {
-        const response = await fetch(`https://api.scripture.api.bible/v1/bibles/${bibleId}/search?query=${encodeURIComponent(query)}`, {
-            headers: { 'api-key': apiKey }
+        const url = `https://api.scripture.api.bible/v1/bibles/${bibleId}/search?query=${encodeURIComponent(query)}`;
+        const response = await fetch(url, {
+            headers: {
+                'api-key': apiKey,
+                'accept': 'application/json'
+            }
         });
-        const data = await response.json();
-        
-        if (data.data && data.data.passages && data.data.passages.length > 0) {
-            // L'API renvoie du HTML, on utilise une regex pour extraire uniquement le texte
-            let text = data.data.passages[0].content.replace(/<\/?[^>]+(>|$)/g, "").trim();
-            let ref = data.data.passages[0].reference;
-            res.json({ success: true, text: `${text} (${ref})` });
-        } else {
-            res.json({ success: false, message: "Aucun verset trouvé pour cette référence." });
+
+        const raw = await response.text();
+        let data;
+        try {
+            data = JSON.parse(raw);
+            console.log(JSON.stringify(data, null, 2));
+        } catch (e) {
+            console.error("Réponse non JSON de l'API.Bible:", raw);
+            return res.status(502).json({ success: false, message: "Réponse invalide de l'API.Bible." });
         }
+
+        if (!response.ok) {
+            console.error("Erreur API.Bible:", response.status, data);
+            return res.status(response.status).json({
+                success: false,
+                message: data?.message || "Erreur API.Bible."
+            });
+        }
+
+        const container = data?.data || {};
+
+        const passage =
+            container.passages?.[0] ||
+            container.verses?.[0] ||
+            container.hits?.[0] ||
+            null;
+
+        if (!passage) {
+            console.log("Réponse API.Bible complète:", JSON.stringify(data, null, 2));
+            return res.json({
+                success: false,
+                message: `Aucun verset trouvé pour la référence "${query}".`
+            });
+        }
+
+        const text = String(
+            passage.content || passage.text || passage.verse || ""
+        )
+            .replace(/<[^>]+>/g, "")
+            .replace(/\s+/g, " ")
+            .trim();
+
+        const ref = passage.reference || query;
+
+        return res.json({
+            success: true,
+            text: `${text} (${ref})`
+        });
     } catch (error) {
         console.error("Erreur API Bible:", error);
-        res.status(500).json({ error: "Erreur de communication avec API.Bible." });
+        return res.status(500).json({ success: false, message: "Erreur de communication avec API.Bible." });
     }
 });
 
