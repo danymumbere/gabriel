@@ -411,6 +411,27 @@ app.post('/add-message', (req, res) => {
     }
 });
 
+app.get('/bibles', async (req, res) => {
+    try {
+        const response = await fetch(
+            'https://api.scripture.api.bible/v1/bibles',
+            {
+                headers: {
+                    'api-key': process.env.BIBLE_API_KEY
+                }
+            }
+        );
+
+        const data = await response.json();
+
+        res.json(data);
+    } catch (err) {
+        res.status(500).json({
+            error: err.message
+        });
+    }
+});
+
 // --- ROADMAP DU DISCIPLE & JOURNAL PRIVÉ ---
 app.get('/discipulat', (req, res) => res.sendFile(path.join(__dirname, 'discipulat.html')));
 
