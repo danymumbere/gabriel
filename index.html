@@ -22,13 +22,23 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <style>
-        body { font-family: sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
-        .container { max-width: 500px; margin: auto; background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); text-align: center; }
+        :root{--vert:#1f5f4a;--vert2:#2f7d62;--creme:#faf7f0;--or:#c9973b;--ligne:#e6e0d2}
+        body { font-family: system-ui,-apple-system,"Segoe UI",sans-serif; background-color: var(--creme); color: #26322d; margin: 0; padding: 0 20px 20px; }
+        h1,h3,h4 { font-family: Georgia,"Times New Roman",serif; color: var(--vert); }
+        h4 { font-weight: normal; color: #6b766f; }
+        .gnav { display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; max-width:760px; margin:0 auto; padding:14px 0; }
+        .gnav .brand { display:flex; align-items:center; gap:8px; font-family:Georgia,serif; font-weight:bold; color:var(--vert); text-decoration:none; font-size:1.15em; }
+        .gnav .brand img { width:34px; height:34px; border-radius:50%; }
+        .gnav div a { margin-left:14px; color:#6b766f; text-decoration:none; font-size:.95em; padding-bottom:3px; }
+        .gnav div a.actif { color:var(--vert); border-bottom:2px solid var(--or); font-weight:600; }
+        .chemin-cta { margin-top:20px; padding:16px; background:#fdf6e6; border-left:4px solid var(--or); border-radius:10px; text-align:left; font-size:.92em; color:#6d5316; }
+        .chemin-cta a { display:inline-block; margin-top:8px; color:var(--vert); font-weight:600; text-decoration:none; }
+        .container { max-width: 500px; margin: auto; background: white; padding: 22px; border-radius: 18px; border: 1px solid var(--ligne); box-shadow: 0 6px 18px rgba(31,95,74,0.08); text-align: center; }
         .status { color: #25D366; font-weight: bold; margin: 10px 0; }
         .pairing-section, .donation-menu { margin-top: 20px; padding: 15px; border-top: 1px solid #eee; }
         .pairing-code { font-size: 32px; font-weight: bold; color: #25D366; margin: 10px 0; letter-spacing: 2px; }
-        input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box; }
-        button { background-color: #25D366; color: white; border: none; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
+        input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 10px; border: 1px solid #ccc; box-sizing: border-box; }
+        button { background-color: var(--vert); color: white; border: none; font-weight: bold; cursor: pointer; transition: opacity 0.2s; }
         button:hover { opacity: 0.9; }
         .grid-networks { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         details { text-align: left; background: #f9f9f9; padding: 10px; border-radius: 8px; margin-bottom: 15px; border: 1px solid #eee; }
@@ -85,6 +95,10 @@
     </style>
 </head>
 <body>
+    <nav class="gnav">
+        <a class="brand" href="/"><img src="/images/logo_gabriel_deux.jpg" alt="">Gabriel</a>
+        <div><a href="/" class="actif">📣 Diffuser</a><a href="/discipulat">🌱 Mon chemin</a></div>
+    </nav>
     <div class="container">
         <img src="/images/logo_gabriel_deux.jpg" style="width: 80px; border-radius: 50%;" alt="--logo--">
         <h1>Bienvenue sur Gabriel</h1>
@@ -143,6 +157,12 @@
             </button>
         </div>
 
+        <div class="chemin-cta">
+            <b>Évangéliser, c’est aussi grandir.</b><br>
+            Un espace privé pour t’enraciner en Christ, à ton rythme, sans pression ni classement.
+            <br><a href="/discipulat">🌱 Commencer mon chemin de disciple →</a>
+        </div>
+
         <div class="spacer"></div>
 
         <div class="donation-menu">
@@ -174,7 +194,7 @@
     </div>
 
     <p style="margin-top:30px; font-size:0.9em; text-align: center;">
-        <a href="/discipulat">🌱 Le parcours du disciple</a> |
+        <a href="/discipulat">🌱 Mon chemin de disciple</a> |
         <a href="/privacy" target="_blank">Politique de confidentialité</a> |
         <a href="/terms" target="_blank">Conditions d'utilisation</a>
     </p>
