@@ -1,7 +1,8 @@
 const path = require('path');
 require('dotenv').config();
 const { google } = require('googleapis');
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const fs = require('fs');
 const pino = require('pino');
 const QRCode = require('qrcode');
 const express = require('express');
@@ -53,72 +54,161 @@ function normaliserNumeroRdc(numero) {
 }
 
 // --- CONFIGURATION BAILEYS ---
+// Sur Render, mettez AUTH_DIR sur un disque persistant (ex: /var/data/baileys_auth_info)
+// sinon la session WhatsApp est perdue à chaque redémarrage/déploiement.
+const AUTH_DIR = process.env.AUTH_DIR || 'baileys_auth_info';
+
 let sock;
-let isWhatsAppReady = false;
+let isWhatsAppReady = false;   // WhatsApp connecté et authentifié
+let readyForPairing = false;   // websocket ouvert, on peut demander un code
+let lastQr = null;             // dernier QR, renvoyé aux nouveaux visiteurs
+let reconnectTimer = null;
+let reconnectAttempts = 0;
 let broadcastRunning = false;
 
-async function connectToWhatsApp() {
-    // Sauvegarde la session dans un dossier local pour éviter de se reconnecter
-    const { state, saveCreds } = await useMultiFileAuthState('baileys_auth_info');
+function waitFor(condition, timeoutMs = 20000, stepMs = 300) {
+    return new Promise(resolve => {
+        const start = Date.now();
+        const tick = () => {
+            if (condition()) return resolve(true);
+            if (Date.now() - start >= timeoutMs) return resolve(false);
+            setTimeout(tick, stepMs);
+        };
+        tick();
+    });
+}
 
-    sock = makeWASocket({
+function scheduleReconnect(delayMs) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => {
+        connectToWhatsApp().catch(err => {
+            console.error('Erreur de reconnexion WhatsApp:', err);
+            reconnectAttempts++;
+            scheduleReconnect(Math.min(30000, 2000 * 2 ** reconnectAttempts));
+        });
+    }, delayMs);
+}
+
+async function connectToWhatsApp() {
+    clearTimeout(reconnectTimer);
+
+    // Ferme proprement l'ancien socket pour ne pas en avoir deux en parallèle
+    if (sock) {
+        try { sock.ev.removeAllListeners(); sock.end(undefined); } catch (_) {}
+    }
+    readyForPairing = false;
+    isWhatsAppReady = false;
+
+    const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+
+    // Une version de protocole périmée fait fermer la connexion par WhatsApp
+    let version;
+    try {
+        ({ version } = await fetchLatestBaileysVersion());
+        console.log('Version WhatsApp Web utilisée :', version.join('.'));
+    } catch (e) {
+        console.warn('Impossible de récupérer la dernière version, version par défaut utilisée.');
+    }
+
+    const currentSock = makeWASocket({
+        ...(version ? { version } : {}),
         auth: state,
         printQRInTerminal: false,
-        logger: pino({ level: 'silent' }), // Masque les logs internes de Baileys
-        browser: ["Ubuntu", "Chrome", "20.0.04"] // Facilite le couplage par code
+        logger: pino({ level: 'silent' }),
+        browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
+    sock = currentSock;
 
-    sock.ev.on('creds.update', saveCreds);
+    currentSock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
+    currentSock.ev.on('connection.update', async (update) => {
+        if (currentSock !== sock) return; // événement d'un ancien socket
         const { connection, lastDisconnect, qr } = update;
 
         if (qr) {
+            // Un QR n'est émis que lorsque le websocket est ouvert : on peut demander un code
+            readyForPairing = true;
             try {
-                const url = await QRCode.toDataURL(qr);
-                io.emit('qr_code', url);
+                lastQr = await QRCode.toDataURL(qr);
+                io.emit('qr_code', lastQr);
             } catch (err) {
                 console.error('Erreur génération QR:', err);
             }
         }
 
-        if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error?.output?.statusCode !== DisconnectReason.loggedOut);
-            isWhatsAppReady = false;
-            
-            if (shouldReconnect) {
-                io.emit('status', "Reconnexion à WhatsApp en cours...");
-                connectToWhatsApp(); // Reconnexion automatique
-            } else {
-                io.emit('status', "WhatsApp s'est déconnecté. Veuillez relier l'appareil.");
-            }
-        } else if (connection === 'open') {
+        if (connection === 'open') {
             isWhatsAppReady = true;
+            readyForPairing = false;
+            lastQr = null;
+            reconnectAttempts = 0;
             io.emit('status', 'WhatsApp est connecté ! ✅');
+        }
+
+        if (connection === 'close') {
+            isWhatsAppReady = false;
+            readyForPairing = false;
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            console.log(`Connexion WhatsApp fermée (code ${statusCode}) :`, lastDisconnect?.error?.message);
+
+            if (statusCode === DisconnectReason.loggedOut) {
+                // Session invalide : on l'efface pour repartir sur un nouveau QR
+                try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); } catch (_) {}
+                lastQr = null;
+                io.emit('status', "Session WhatsApp expirée. Nouveau code QR en préparation...");
+                scheduleReconnect(1000);
+            } else if (statusCode === DisconnectReason.restartRequired) {
+                // Normal juste après un appairage réussi
+                scheduleReconnect(0);
+            } else {
+                reconnectAttempts++;
+                io.emit('status', "Reconnexion à WhatsApp en cours...");
+                scheduleReconnect(Math.min(30000, 2000 * 2 ** reconnectAttempts));
+            }
         }
     });
 }
 
+// Un rejet de promesse non géré ne doit pas tuer tout le serveur
+process.on('unhandledRejection', (err) => console.error('unhandledRejection:', err));
+process.on('uncaughtException', (err) => console.error('uncaughtException:', err));
+
 // Initialisation au démarrage
-connectToWhatsApp();
+connectToWhatsApp().catch(err => {
+    console.error('Erreur au démarrage WhatsApp:', err);
+    scheduleReconnect(5000);
+});
 
 // --- SOCKET.IO ---
 io.on('connection', (socket) => {
     if (isWhatsAppReady) {
         socket.emit('status', 'WhatsApp est connecté ! ✅');
+    } else if (lastQr) {
+        socket.emit('qr_code', lastQr);
     }
 
     socket.on('request_pairing_code', async (phoneNumber) => {
+        const cleanNumber = String(phoneNumber || '').replace(/\D/g, '');
+
+        if (cleanNumber.length < 8 || cleanNumber.length > 15) {
+            return socket.emit('pairing_error', "Numéro invalide. Format attendu : indicatif pays + numéro (ex : 243812345678).");
+        }
+        if (isWhatsAppReady) {
+            return socket.emit('pairing_error', 'WhatsApp est déjà connecté.');
+        }
+        if (sock?.authState?.creds?.registered) {
+            return socket.emit('pairing_error', 'Une session existe déjà, reconnexion en cours. Réessayez dans quelques secondes.');
+        }
+
         try {
-            const cleanNumber = String(phoneNumber).replace(/\D/g, '');
-            // Baileys a parfois besoin d'un léger délai pour générer le code
-            setTimeout(async () => {
-                const code = await sock.requestPairingCode(cleanNumber);
-                socket.emit('pairing_code', code);
-            }, 1000);
+            // On attend que le websocket soit réellement ouvert avant de demander le code
+            const ready = await waitFor(() => readyForPairing, 20000);
+            if (!ready) throw new Error('Websocket WhatsApp non prêt');
+
+            const code = await sock.requestPairingCode(cleanNumber);
+            socket.emit('pairing_code', code);
         } catch (err) {
-            console.error('Erreur pairing:', err);
-            socket.emit('error', 'Erreur lors de la génération du code. Vérifiez le numéro.');
+            console.error('Erreur pairing:', err?.message || err);
+            socket.emit('pairing_error', "Impossible de générer le code pour le moment. Réessayez dans quelques secondes ou utilisez le QR code.");
         }
     });
 });
